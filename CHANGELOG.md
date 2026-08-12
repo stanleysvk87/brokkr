@@ -355,3 +355,40 @@ against the real daemon too: with the window set to ~1 second, a second
 container id; with the window left at its 60-minute default, two calls
 a few seconds apart kept the same container id, confirming normal use
 isn't disrupted.
+
+## Concurrency verification and first-use race fix — 2026-08-12
+
+Ran two overlapping `sandbox exec` commands and two complete `propose`
+pipelines against the shared container and SQLite stores for the first
+time. Existing-container execution held: both three-second commands
+really overlapped, returned correctly attributed output and distinct
+command IDs, and produced complete SQLite, blob, and JSONL records. The
+two proposals also initialized empty memory/approval stores concurrently,
+then approved, executed, and remembered different commands without a
+lost write, constraint error, or `database is locked`; integrity checks
+on all three databases passed.
+
+A separate first-use variant found a real race. With no container yet,
+two CLI processes could both observe that absence and both call Docker
+create with the fixed `brokkr-sandbox` name. One succeeded; the other
+received an uncaught Docker 409 name conflict and printed a full
+traceback instead of running. Fixed by serializing only the short named-
+container lifecycle section (check, idle reset, create, and explicit
+reset) with an OS file lock at `data/sandbox.lock`. Command execution is
+outside that lock and remains concurrent. A regression test starts two
+independent `DockerSandbox` instances simultaneously and proves the
+container create path runs exactly once; repeated live first-use races
+then completed both commands without errors or missing audit rows.
+
+Racing an explicit `sandbox reset` against a confirmed in-flight eight-
+second exec found a second shared-state race. The process handling itself
+was clean -- reset stopped and removed the container, the interrupted
+command returned exit 137 with its partial output and a complete audit
+record, and reset returned success without a traceback -- but the exec's
+unconditional final timestamp write could recreate `sandbox_last_used`
+after reset had deleted it. The timestamp update now takes the lifecycle
+lock and only writes if the same container still exists. This makes both
+orderings deterministic: either exec records use before reset deletes the
+marker, or reset removes the container first and the exec skips its stale
+write. Repeating the live race left neither container nor marker, and the
+next exec created a clean sandbox.

@@ -44,9 +44,12 @@ backstop for a hung daemon/socket, not as the primary timeout mechanism.
 
 from __future__ import annotations
 
+import fcntl
 import logging
 import os
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -139,6 +142,12 @@ class DockerSandbox:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(datetime.now(timezone.utc).isoformat())
 
+    def _touch_last_used_if_current(self, container_id: str) -> None:
+        with self._lifecycle_lock():
+            container = self._get_container()
+            if container is not None and container.id == container_id:
+                self._touch_last_used()
+
     def _is_idle_expired(self) -> bool:
         idle_minutes = self._settings.sandbox.idle_reset_minutes
         if idle_minutes <= 0:
@@ -152,18 +161,34 @@ class DockerSandbox:
         elapsed_minutes = (datetime.now(timezone.utc) - last_used).total_seconds() / 60
         return elapsed_minutes >= idle_minutes
 
+    @contextmanager
+    def _lifecycle_lock(self) -> Iterator[None]:
+        """Serializes named-container check/create/reset across CLI processes."""
+        path = self._settings.sandbox_lock_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
     def ensure_running(self) -> Container:
         """Returns the long-lived sandbox container, starting or creating
         it if necessary. Auto-resets it first if it's been idle past
         BROKKR_SANDBOX_IDLE_RESET_MINUTES; otherwise does NOT reset an
         existing container's rootfs -- call reset() explicitly for that."""
+        with self._lifecycle_lock():
+            return self._ensure_running_locked()
+
+    def _ensure_running_locked(self) -> Container:
         container = self._get_container()
         if container is not None and self._is_idle_expired():
             logger.info(
                 "Sandbox idle past %.0f minutes, resetting before reuse",
                 self._settings.sandbox.idle_reset_minutes,
             )
-            self.reset()
+            self._reset_locked()
             container = None
 
         if container is not None:
@@ -215,6 +240,10 @@ class DockerSandbox:
         """Stops and removes the sandbox container so the next
         ensure_running() call creates it fresh -- new rootfs, nothing
         carried over from before."""
+        with self._lifecycle_lock():
+            self._reset_locked()
+
+    def _reset_locked(self) -> None:
         self._settings.sandbox_last_used_path.unlink(missing_ok=True)
         container = self._get_container()
         if container is None:
@@ -254,7 +283,7 @@ class DockerSandbox:
         except APIError as exc:
             raise SandboxError(f"docker exec failed: {exc}") from exc
         duration_ms = (time.monotonic() - started) * 1000
-        self._touch_last_used()
+        self._touch_last_used_if_current(container.id)
 
         stdout, stdout_truncated = _truncate(stdout_bytes or b"", _MAX_STDOUT_BYTES)
         stderr, stderr_truncated = _truncate(stderr_bytes or b"", _MAX_STDERR_BYTES)

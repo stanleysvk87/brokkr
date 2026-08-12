@@ -69,6 +69,10 @@ class Settings(BaseModel):
     def sandbox_last_used_path(self) -> Path:
         return self.data_dir / "sandbox_last_used"
 
+    @property
+    def sandbox_lock_path(self) -> Path:
+        return self.data_dir / "sandbox.lock"
+
 
 def _resolve_dir(value: str) -> Path:
     path = Path(value).expanduser()
