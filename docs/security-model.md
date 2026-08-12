@@ -145,11 +145,14 @@ issue.
 - **`permissions/policy.py`'s static blocklist** exists to give a fast,
   auditable "never executed" rejection for a short list of known
   catastrophic patterns (`rm -rf /`, `dd` to a raw block device, `mkfs`,
-  recognizable fork bombs), and to avoid needlessly destroying and
-  rebuilding the sandbox rootfs for commands that were never going
-  anywhere legitimate. It is explicitly *not* a general shell-attack
-  filter — brokkr never uses `shell=True` anywhere (argv lists only,
-  matching the discipline in `sandbox/docker_sandbox.py`), so classic
+  recursive `chmod` on a root, and recognizable fork bombs), and to avoid
+  needlessly destroying and rebuilding the sandbox rootfs for commands
+  that were never going anywhere legitimate. The executable-specific
+  checks apply both to top-level argv and to command segments inside an
+  explicit `bash -c` or `sh -c` script, including one nested shell level.
+  It is explicitly *not* a general shell-attack filter — brokkr never uses
+  `shell=True` anywhere (argv lists only, matching the discipline in
+  `sandbox/docker_sandbox.py`). Outside an explicit shell script, classic
   shell metacharacter attacks (`;`, `&&`, `|`, `>`) simply don't work as
   shell syntax when passed as argv elements in the first place.
 - **The remembered-approval store is exact-match only.** See

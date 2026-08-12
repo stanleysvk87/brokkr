@@ -21,6 +21,12 @@ from brokkr.permissions.policy import check_prohibited
         ["mkfs.ext4", "/dev/sdb1"],
         ["chmod", "-R", "777", "/"],
         ["bash", "-c", ":(){ :|:& };:"],
+        ["bash", "-c", "rm -rf /workspace"],
+        ["sh", "-c", "chmod -R 777 /workspace"],
+        ["bash", "-c", "dd if=/dev/zero of=/dev/sda bs=1M count=1"],
+        ["bash", "-c", "echo hello && rm -rf /workspace"],
+        ["bash", "-c", "bash -c 'rm -rf /workspace'"],
+        ["bash", "-c", "rm -rf /workspace; printf 'unterminated"],
     ],
 )
 def test_blocks_known_catastrophic_patterns(argv):
@@ -37,6 +43,13 @@ def test_blocks_known_catastrophic_patterns(argv):
         ["chmod", "-R", "755", "/workspace/project"],
         ["git", "clone", "https://example.com/repo.git"],
         ["python3", "script.py"],
+        [
+            "bash",
+            "-c",
+            "mkdir /workspace/out && cp /workspace/a.txt /workspace/out/",
+        ],
+        ["bash", "-c", "printf '%s' 'rm -rf /workspace'"],
+        ["bash", "-c", "printf 'unterminated"],
     ],
 )
 def test_allows_ordinary_commands(argv):

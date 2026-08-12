@@ -565,3 +565,23 @@ missing results, memory-note creation, and symlink rejection. Live verification
 followed the printed redirect command, used both full and short IDs, confirmed
 the saved result entered later proposal context, and confirmed neither manual
 handling nor manual result display created sandbox activity.
+
+## Shell-wrapped blocklist bypass fix — 2026-08-12
+
+**Real safety gap found during live dogfooding**: the static blocklist
+checked destructive `rm`, `dd`, `mkfs`, and recursive `chmod` shapes only
+when the executable was the top-level argv entry. The project's encouraged
+multi-step form, `bash -c <script>` (and its `sh` equivalent), could therefore
+wrap the same command and bypass the deterministic rejection. Live edited
+proposal tests confirmed that a wrapped workspace-root deletion and recursive
+permission change reached execution; an earlier raw-device `dd` happened not
+to run only because that particular script's own non-interactive confirmation
+failed, not because brokkr stopped it.
+
+The policy now tokenizes explicit shell scripts into command segments and
+applies the same executable-specific checks to every segment, with one level
+of nested `bash -c` / `sh -c` inspection. Fork-bomb matching remains unchanged,
+ordinary multi-step shell commands remain allowed, and malformed shell text is
+skipped without crashing. Regression tests lock in all three shell-wrapped
+command shapes, a dangerous later segment, nested wrapping, safe multi-step
+usage, quoted dangerous-looking text, and unbalanced quotes.
