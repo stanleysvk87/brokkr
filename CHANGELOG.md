@@ -504,3 +504,25 @@ Docker's built-in init process, which becomes PID 1 and reaps those children.
 Added a regression test asserting every new sandbox requests `init=True` and
 verified live that a detached short sleep disappeared after completion while
 the container continued accepting later execs.
+
+## First-use UX: clearer errors and more realistic proposals -- 2026-08-12
+
+Addressed three concrete findings from a new-user session. Invalid model output
+still goes through the same deterministic validators and the full technical
+error remains in the audit trail, but the CLI now shows a short explanation
+instead of exposing a multi-line Pydantic diagnostic. Empty argv, bare shell
+operators, malformed JSON, and Ollama request failures each have a focused
+human-readable summary, with the original error retained as the fallback.
+
+The system prompt now directs network reachability checks to `curl`, not
+`ping`, because the sandbox deliberately drops the raw-socket capability that
+ping requires. It also tells the model to propose `ls` or `find` when a task
+describes a file without an exact known path, rather than inventing a plausible
+filename. These are best-effort proposal-quality instructions, not new safety
+guarantees or automatic workspace access; sandbox capabilities and the
+explicit-context architecture remain unchanged. In live retesting, two varied
+network tasks both produced `curl -I` instead of `ping`. An indirectly-described
+file initially still produced a guessed `rm` path, so the guidance was made
+more explicit; the repeated task then produced a read-only `find` instead. Its
+glob was too narrow to locate the actual fixture, so this improved the safe
+discovery behavior but did not fully solve small-model filename reasoning.

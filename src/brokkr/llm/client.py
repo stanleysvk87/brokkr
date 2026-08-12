@@ -60,6 +60,13 @@ _SYSTEM_PROMPT = (
     "Never propose a shell pipeline joined by ;, &&, or | as a single argv "
     'string -- if the task genuinely needs a shell, propose ["bash", "-c", '
     '"<script>"] instead, with the whole script as one argv element. '
+    "For network reachability checks, use curl instead of ping: this sandbox "
+    "deliberately has no raw-socket capability, so ping cannot work. "
+    "A description such as 'the shopping list file' is not an exact filename. "
+    "Never infer spaces, underscores, or an extension from a description. If a "
+    "task refers to a file this way and its exact path is not stated in the "
+    "current task or human-provided context, propose only ls or find to discover "
+    "it; do not propose rm, mv, or another mutation with a guessed path. "
     "Respond only with the JSON object described by the schema."
 )
 
@@ -111,6 +118,19 @@ class ProposalResult:
     latency_ms: float
     proposal: CommandProposal | None = None
     error: str | None = None
+    user_error: str | None = None
+
+
+def _validation_user_error(exc: ValidationError) -> str:
+    messages = [str(error.get("msg", "")) for error in exc.errors()]
+    if any("argv must not be empty" in message for message in messages):
+        return "The model did not propose a command. Try rephrasing the task."
+    if any("bare shell operator" in message for message in messages):
+        return (
+            "The model proposed a shell operator outside a shell, so brokkr "
+            "rejected it. Try rephrasing the task."
+        )
+    return "The model returned a command in an unsupported format. Try rephrasing the task."
 
 
 class OllamaClient:
@@ -163,6 +183,10 @@ class OllamaClient:
                 raw_content="",
                 latency_ms=(time.monotonic() - started) * 1000,
                 error=f"Ollama request failed: {exc}",
+                user_error=(
+                    "The model request failed. Check that Ollama is running, the URL is "
+                    "correct, and the configured model is available."
+                ),
             )
 
         latency_ms = (time.monotonic() - started) * 1000
@@ -171,13 +195,26 @@ class OllamaClient:
         try:
             parsed = json.loads(raw_content)
             validated = _ProposalSchema.model_validate(parsed)
-        except (json.JSONDecodeError, ValidationError) as exc:
+        except json.JSONDecodeError as exc:
             return ProposalResult(
                 task_description=task_description,
                 model=effective_model,
                 raw_content=raw_content,
                 latency_ms=latency_ms,
                 error=f"model returned an invalid proposal: {exc}",
+                user_error=(
+                    "The model returned a response brokkr could not parse. "
+                    "Try rephrasing the task."
+                ),
+            )
+        except ValidationError as exc:
+            return ProposalResult(
+                task_description=task_description,
+                model=effective_model,
+                raw_content=raw_content,
+                latency_ms=latency_ms,
+                error=f"model returned an invalid proposal: {exc}",
+                user_error=_validation_user_error(exc),
             )
 
         return ProposalResult(

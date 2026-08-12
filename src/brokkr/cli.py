@@ -150,7 +150,7 @@ def propose(
     audit.record_proposal(command_id, result)
 
     if result.error:
-        console.print(f"[red]proposal failed:[/red] {result.error}")
+        console.print(f"[red]proposal failed:[/red] {result.user_error or result.error}")
         raise typer.Exit(code=1)
 
     proposal = result.proposal

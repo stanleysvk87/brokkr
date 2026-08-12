@@ -94,6 +94,9 @@ def test_propose_errors_on_malformed_json(monkeypatch, settings):
 
     assert result.proposal is None
     assert result.error is not None
+    assert result.user_error == (
+        "The model returned a response brokkr could not parse. Try rephrasing the task."
+    )
 
 
 def test_propose_errors_on_empty_argv(monkeypatch, settings):
@@ -104,6 +107,7 @@ def test_propose_errors_on_empty_argv(monkeypatch, settings):
 
     assert result.proposal is None
     assert result.error is not None
+    assert result.user_error == "The model did not propose a command. Try rephrasing the task."
 
 
 def test_propose_errors_on_bare_shell_operator_token(monkeypatch, settings):
@@ -122,6 +126,10 @@ def test_propose_errors_on_bare_shell_operator_token(monkeypatch, settings):
 
     assert result.proposal is None
     assert "bare shell operator" in result.error
+    assert result.user_error == (
+        "The model proposed a shell operator outside a shell, so brokkr rejected it. "
+        "Try rephrasing the task."
+    )
 
 
 def test_propose_errors_on_connection_failure(monkeypatch, settings):
@@ -134,3 +142,16 @@ def test_propose_errors_on_connection_failure(monkeypatch, settings):
 
     assert result.proposal is None
     assert "Ollama request failed" in result.error
+    assert result.user_error is not None
+    assert "Check that Ollama is running" in result.user_error
+
+
+def test_system_prompt_steers_network_checks_away_from_ping():
+    assert "use curl instead of ping" in _SYSTEM_PROMPT
+    assert "no raw-socket capability" in _SYSTEM_PROMPT
+
+
+def test_system_prompt_prefers_discovery_over_guessing_file_paths():
+    assert "Never infer spaces, underscores, or an extension" in _SYSTEM_PROMPT
+    assert "propose only ls or find to discover" in _SYSTEM_PROMPT
+    assert "do not propose rm, mv" in _SYSTEM_PROMPT
