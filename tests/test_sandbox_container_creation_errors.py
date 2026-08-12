@@ -38,3 +38,19 @@ def test_container_creation_api_error_becomes_sandbox_error(sandbox, monkeypatch
 
     with pytest.raises(SandboxError, match="failed to create sandbox container"):
         sandbox.ensure_running()
+
+
+def test_container_creation_enables_init_reaper(sandbox, monkeypatch):
+    captured = {}
+    container = SimpleNamespace(id="container-id")
+
+    def _run(*args, **kwargs):
+        captured.update(kwargs)
+        return container
+
+    monkeypatch.setattr(sandbox, "_get_container", lambda: None)
+    monkeypatch.setattr(sandbox, "build_image", lambda: "image-id")
+    sandbox._client = SimpleNamespace(containers=SimpleNamespace(run=_run))
+
+    assert sandbox.ensure_running() is container
+    assert captured["init"] is True

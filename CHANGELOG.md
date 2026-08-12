@@ -482,3 +482,25 @@ subnet, running for the whole pass, logged nothing unexpected. No code
 changes -- `docs/security-model.md`'s "What was actually tested" section
 now records this pass. VM left clean (`sandbox reset`, runtime state
 cleared).
+
+## VM capability dogfooding: reap completed background work -- 2026-08-12
+
+Ran ordinary file, system-information, process, tool-availability, and large-
+output tasks through `brokkr propose` on the small VM. File creation, 5 MiB
+I/O, `lscpu`, memory/kernel/disk reporting, text processing, and the installed
+`jq`/ZIP/Git/curl/Python tools all worked within the configured limits. The
+expected Docker boundary also held: a natural `docker ps` proposal failed with
+exit 127 because neither the Docker CLI nor socket is exposed in the sandbox.
+The model occasionally produced incomplete, nonportable, or invalid commands;
+human review and the existing bare-operator validator caught those cases.
+
+A real lifecycle bug surfaced after starting `sleep 120` in the background and
+inspecting it from a later proposal. The process correctly survived between
+exec calls, but after it finished it remained as a zombie adopted by PID 1.
+The long-lived container used `sleep infinity` as PID 1, which does not reap
+orphaned children, so repeated completed background jobs could permanently
+consume slots from the PID cgroup until reset. Container creation now enables
+Docker's built-in init process, which becomes PID 1 and reaps those children.
+Added a regression test asserting every new sandbox requests `init=True` and
+verified live that a detached short sleep disappeared after completion while
+the container continued accepting later execs.

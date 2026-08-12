@@ -205,6 +205,11 @@ class DockerSandbox:
                 sandbox.image,
                 name=sandbox.container_name,
                 detach=True,
+                # Detached exec children are reparented when their launching
+                # shell exits. Docker's tiny init becomes PID 1 and reaps them
+                # when they later finish, preventing zombie accumulation in
+                # this intentionally long-lived container.
+                init=True,
                 network_mode=sandbox.network,
                 mem_limit=sandbox.memory_limit,
                 nano_cpus=int(sandbox.cpu_limit * 1_000_000_000),

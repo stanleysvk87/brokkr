@@ -94,8 +94,10 @@ Detached background processes can persist too: a process that does not
 keep the initiating exec's streams open is reparented to container PID 1
 when its shell exits and continues consuming the sandbox's PID, memory,
 and CPU allowances until it exits, is killed explicitly, or the sandbox
-is reset. Later execs still work, but they do not implicitly clean up or
-inherit that process's environment.
+is reset. Docker's init process runs as PID 1 and reaps a detached process
+after it exits, so completed background work does not accumulate as zombies.
+Later execs still work, but they do not implicitly stop a process that is
+still running or inherit that process's environment.
 
 Its rootfs is never modified in place across a reset: `brokkr sandbox
 reset` stops and removes the container entirely, and the next command
