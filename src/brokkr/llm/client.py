@@ -61,7 +61,9 @@ _SYSTEM_PROMPT = (
     'string -- if the task genuinely needs a shell, propose ["bash", "-c", '
     '"<script>"] instead, with the whole script as one argv element. '
     "For network reachability checks, use curl instead of ping: this sandbox "
-    "deliberately has no raw-socket capability, so ping cannot work. "
+    "deliberately has no raw-socket capability, so ping cannot work. dmesg "
+    "and other kernel-log commands will fail the same way (no CAP_SYSLOG); "
+    "do not propose them. "
     "A description such as 'the shopping list file' is not an exact filename. "
     "Never infer spaces, underscores, or an extension from a description. If a "
     "task refers to a file this way and its exact path is not stated in the "

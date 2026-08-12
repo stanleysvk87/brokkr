@@ -526,3 +526,17 @@ file initially still produced a guessed `rm` path, so the guidance was made
 more explicit; the repeated task then produced a read-only `find` instead. Its
 glob was too narrow to locate the actual fixture, so this improved the safe
 discovery behavior but did not fully solve small-model filename reasoning.
+
+## dmesg follow-up to the ping guidance -- 2026-08-12
+
+Dogfooding a "check kernel messages" task right after the ping fix hit the
+same underlying cause: `dmesg` needs `CAP_SYSLOG` (root, or that specific
+capability), which `--cap-drop ALL` removes the same way it removes
+`CAP_NET_RAW` for `ping`. Worth calling out explicitly: even if `dmesg`
+somehow worked, the kernel ring buffer isn't namespaced per-container --
+it's a host-wide resource, so allowing it would leak host kernel messages,
+not just be "a missing tool." Extended the same system-prompt sentence
+already steering the model away from `ping` to also name `dmesg`
+specifically. Verified live: a repeated "show recent kernel messages" task
+now proposes `ls /var/log` (safe discovery) instead of `dmesg`. Added a
+matching prompt-content test. No sandbox capability changes.

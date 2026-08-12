@@ -151,6 +151,14 @@ def test_system_prompt_steers_network_checks_away_from_ping():
     assert "no raw-socket capability" in _SYSTEM_PROMPT
 
 
+def test_system_prompt_steers_away_from_dmesg():
+    # Same underlying cause as ping (CAP_SYSLOG dropped, same as
+    # CAP_NET_RAW) -- found by dogfooding a "check kernel messages" task
+    # right after the ping fix, same category not a new one.
+    assert "dmesg" in _SYSTEM_PROMPT
+    assert "CAP_SYSLOG" in _SYSTEM_PROMPT
+
+
 def test_system_prompt_prefers_discovery_over_guessing_file_paths():
     assert "Never infer spaces, underscores, or an extension" in _SYSTEM_PROMPT
     assert "propose only ls or find to discover" in _SYSTEM_PROMPT
