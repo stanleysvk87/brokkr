@@ -15,9 +15,7 @@ def test_version_is_a_string():
 
 
 def test_cli_version_command_runs():
-    # Typer collapses a single-command app so it runs without needing the
-    # command name explicitly -- `brokkr` alone, not `brokkr version`.
     runner = CliRunner()
-    result = runner.invoke(app, [])
+    result = runner.invoke(app, ["version"])
     assert result.exit_code == 0
     assert __version__ in result.stdout

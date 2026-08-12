@@ -12,3 +12,55 @@ No sandbox, no LLM integration, no approval logic yet — see
 `~/.claude/plans/partitioned-fluttering-sonnet.md` for the full staged
 build plan this project follows. Stage 1 (Docker sandbox execution
 primitive, no LLM yet) is next.
+
+## Stage 1: Docker sandbox execution primitive — 2026-08-12
+
+Still no LLM — `brokkr sandbox exec -- <argv>` lets a human run an exact
+command directly inside the sandbox, so the sandbox's own safety
+guarantees could be proven before any model is ever wired in to propose
+commands on its own.
+
+Added: `permissions/tiers.py` (five-tier permission model, enforcement
+inverted from a typical read-only agent — `REQUIRES_APPROVAL` routes
+through confirmation instead of being hard-rejected), `permissions/
+policy.py` (static PROHIBITED blocklist — `rm -rf /`, `dd` to a raw block
+device, `mkfs`, recursive `chmod` on `/`, recognizable fork bombs — kept
+deliberately separate from and not applied inside the sandbox mechanism
+itself, since Stage 1's own verification needs to run these *through* the
+sandbox to prove the Docker-level boundary holds on its own merits),
+`config.py` (`BROKKR_*` settings, `.env` over built-in defaults),
+`sandbox/Dockerfile` + `sandbox/docker_sandbox.py` (one long-lived
+container per install, `--network none` default, CPU/memory/PIDs limits,
+`--cap-drop ALL`, `no-new-privileges`, no Docker socket passthrough,
+single bind-mounted workspace, per-command timeout enforced *inside* the
+container via GNU `timeout` rather than host-side process management),
+`audit/store.py` (hybrid SQLite index + per-command JSON blob files + a
+thin JSONL tail — every sandbox execution is fully recorded, and unlike
+a typical best-effort audit logger, a failure to record is never
+silently swallowed here), and CLI wiring (`brokkr sandbox exec/reset/
+status`).
+
+**Real bug found during manual verification**: the sandbox container
+initially ran as a fixed non-root container user (uid 10001) that had no
+write access to the host-mounted workspace directory (owned by whichever
+account runs brokkr) — every write inside `/workspace` failed with
+"Permission denied", which would have silently broken the entire point
+of giving a proposed command a real place to work in. Fixed by running
+the container with `user=<host uid>:<host gid>` instead of the image's
+built-in user, so the mount is actually writable and files created
+through it come out owned by a real host account rather than an orphaned
+container-only uid.
+
+Manually verified per the plan's Stage 1 checklist: a successful command,
+a non-zero exit code, a timed-out infinite loop (confirmed no leftover
+process afterward), `rm -rf /` (confirmed everything outside the mounted
+workspace is untouched — the workspace itself is real, writable storage,
+so its own contents being deleted is the mount boundary working exactly
+as designed, not a failure of it), and a network call with `--network
+none` (confirmed connection failure). All five checks produced matching,
+complete records across `logs/audit.db`, `logs/blobs/`, and
+`logs/audit.jsonl`.
+
+Stage 2 (an LLM proposes a command via structured output, a human
+confirms or edits it, it runs through this same sandbox mechanism) is
+next.

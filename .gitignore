@@ -19,12 +19,19 @@ data/*.db
 data/*.db-wal
 data/*.db-shm
 data/*.db-journal
+logs/*.db
+logs/*.db-wal
+logs/*.db-shm
+logs/*.db-journal
 logs/*.jsonl
 logs/*.log
 logs/blobs/
 
 # Sandbox workspace -- host-side mount target, never part of the repo
 brokkr-workspace/
+
+# Personal orientation notes -- not part of the product, never committed
+STATUS.md
 
 # Tooling caches
 .pytest_cache/
