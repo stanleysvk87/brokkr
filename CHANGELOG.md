@@ -405,3 +405,31 @@ proposal was inspected and rejected, so no model-proposed command ran.
 Updated the stale Stage 0–3 status to Stage 0–5, added examples for the existing
 human-curated memory commands, made the revoke/forget ID examples valid shell,
 and added the missing `BROKKR_LOG_LEVEL=INFO` default to `.env.example`.
+
+## First real deployment outside the primary dev machine: clean container-creation errors — 2026-08-12
+
+Deployed brokkr into an isolated VM for the first time (the human's staged
+plan: prove the sandbox thoroughly on the primary machine before ever testing
+against something resembling a real host, and a disposable VM clone is the
+step before that). Setting up Docker, syncing the repo, and configuring
+`BROKKR_OLLAMA_URL` to reach the host machine's Ollama over the VM's isolated
+network all worked as expected -- `brokkr sandbox exec` and a full
+`brokkr propose` round trip both succeeded from inside the VM on the first
+real try once configured.
+
+One real gap surfaced immediately: the VM has 2 CPUs, but
+`BROKKR_SANDBOX_CPU_LIMIT` defaults to `4` (a reasonable default for the
+primary dev machine, not for a small VM). Docker's container-create call
+correctly rejected the impossible CPU limit, but that `APIError` wasn't
+caught anywhere between `ensure_running()` and the CLI -- unlike `exec()`,
+which already wraps `exec_run()` in the same try/except -- so it reached the
+terminal as a raw traceback instead of a clean error. Fixed by wrapping the
+container-creation call the same way, raising `SandboxError` with a readable
+message. Reproduced on the primary machine too by setting an impossible
+`BROKKR_SANDBOX_CPU_LIMIT` there: before the fix, a traceback; after, `sandbox
+error: failed to create sandbox container: ...range of CPUs is from 0.01 to
+12.00...`. Added `tests/test_sandbox_container_creation_errors.py` covering
+the case in isolation. Config values that are actually wrong still need
+correcting by whoever's deploying (here: lowering the VM's own
+`BROKKR_SANDBOX_CPU_LIMIT` to match its real CPU count) -- this fix only
+ensures a wrong value fails cleanly instead of crashing.

@@ -1,0 +1,40 @@
+"""Locks in that a Docker API error during container creation surfaces as
+a clean SandboxError, not a raw traceback -- found by deploying brokkr
+into a resource-constrained VM where the default BROKKR_SANDBOX_CPU_LIMIT
+exceeded what the host actually had available."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+from docker.errors import APIError
+
+from brokkr.config import SandboxConfig, Settings
+from brokkr.sandbox.docker_sandbox import DockerSandbox, SandboxError
+
+
+@pytest.fixture
+def sandbox(tmp_path) -> DockerSandbox:
+    settings = Settings(
+        ollama_url="http://127.0.0.1:11434",
+        default_model="test-model",
+        data_dir=tmp_path / "data",
+        log_dir=tmp_path / "logs",
+        log_level="INFO",
+        sandbox=SandboxConfig(),
+        approval_template_matching=False,
+    )
+    return DockerSandbox(settings)
+
+
+def test_container_creation_api_error_becomes_sandbox_error(sandbox, monkeypatch):
+    def _raise_api_error(*args, **kwargs):
+        raise APIError("400 Client Error: Bad Request (range of CPUs is from 0.01 to 2.00)")
+
+    monkeypatch.setattr(sandbox, "_get_container", lambda: None)
+    monkeypatch.setattr(sandbox, "build_image", lambda: "image-id")
+    sandbox._client = SimpleNamespace(containers=SimpleNamespace(run=_raise_api_error))
+
+    with pytest.raises(SandboxError, match="failed to create sandbox container"):
+        sandbox.ensure_running()

@@ -200,41 +200,54 @@ class DockerSandbox:
         self.build_image()
         sandbox = self._settings.sandbox
         self._touch_last_used()
-        return self._client.containers.run(
-            sandbox.image,
-            name=sandbox.container_name,
-            detach=True,
-            network_mode=sandbox.network,
-            mem_limit=sandbox.memory_limit,
-            nano_cpus=int(sandbox.cpu_limit * 1_000_000_000),
-            pids_limit=sandbox.pids_limit,
-            cap_drop=["ALL"],
-            security_opt=["no-new-privileges"],
-            privileged=False,
-            # Overrides the Dockerfile's own `USER brokkr` (uid 10001) --
-            # that fixed uid has no write access to workdir_host, which is
-            # owned by whichever host account runs brokkr. Running as that
-            # same uid/gid instead means the mount is actually writable AND
-            # files created in it come out owned by a real host user
-            # instead of an orphaned container-only uid. Verified during
-            # Stage 1 manual testing: uid 10001 got "Permission denied" on
-            # a plain `touch` inside /workspace before this fix.
-            user=f"{os.getuid()}:{os.getgid()}",
-            # The host uid above has no matching /etc/passwd entry inside
-            # the container (only root and the image's own uid 10001 do),
-            # so without this, $HOME defaults to "/" -- unwritable, which
-            # broke `pip`'s cache (a warning) and `git config --global`
-            # (a hard "Permission denied" failure), both found by manually
-            # dogfooding real tasks through `brokkr propose` after Stage 3.
-            environment={"HOME": sandbox.workdir_container},
-            volumes={
-                str(sandbox.workdir_host): {
-                    "bind": sandbox.workdir_container,
-                    "mode": "rw",
-                }
-            },
-            working_dir=sandbox.workdir_container,
-        )
+        try:
+            return self._client.containers.run(
+                sandbox.image,
+                name=sandbox.container_name,
+                detach=True,
+                network_mode=sandbox.network,
+                mem_limit=sandbox.memory_limit,
+                nano_cpus=int(sandbox.cpu_limit * 1_000_000_000),
+                pids_limit=sandbox.pids_limit,
+                cap_drop=["ALL"],
+                security_opt=["no-new-privileges"],
+                privileged=False,
+                # Overrides the Dockerfile's own `USER brokkr` (uid 10001)
+                # -- that fixed uid has no write access to workdir_host,
+                # which is owned by whichever host account runs brokkr.
+                # Running as that same uid/gid instead means the mount is
+                # actually writable AND files created in it come out
+                # owned by a real host user instead of an orphaned
+                # container-only uid. Verified during Stage 1 manual
+                # testing: uid 10001 got "Permission denied" on a plain
+                # `touch` inside /workspace before this fix.
+                user=f"{os.getuid()}:{os.getgid()}",
+                # The host uid above has no matching /etc/passwd entry
+                # inside the container (only root and the image's own
+                # uid 10001 do), so without this, $HOME defaults to "/"
+                # -- unwritable, which broke `pip`'s cache (a warning)
+                # and `git config --global` (a hard "Permission denied"
+                # failure), both found by manually dogfooding real tasks
+                # through `brokkr propose` after Stage 3.
+                environment={"HOME": sandbox.workdir_container},
+                volumes={
+                    str(sandbox.workdir_host): {
+                        "bind": sandbox.workdir_container,
+                        "mode": "rw",
+                    }
+                },
+                working_dir=sandbox.workdir_container,
+            )
+        except APIError as exc:
+            # Container creation can fail on a real, correctable config
+            # problem -- e.g. BROKKR_SANDBOX_CPU_LIMIT set higher than the
+            # host actually has (hit for real deploying brokkr inside a
+            # 2-CPU VM with the 4-CPU default meant for a bigger host) --
+            # and docker-py's APIError isn't caught anywhere above this,
+            # so it previously reached the CLI as a raw traceback instead
+            # of the clean SandboxError every other failure mode here
+            # produces.
+            raise SandboxError(f"failed to create sandbox container: {exc}") from exc
 
     def reset(self) -> None:
         """Stops and removes the sandbox container so the next
