@@ -133,6 +133,69 @@ issue.
   is exactly as good as the human's judgment in the moment. brokkr
   cannot force a careful review; it can only make the reviewed
   information (reasoning, exact argv) as clear as possible before asking.
+  This isn't hypothetical: the same natural-language task ("how many
+  lines in a log file mention WARN") was proposed to qwen2.5-coder:7b
+  five separate times and came back as `grep -c WARN <file>` four times
+  and `wc -l <file>` once -- a command that runs cleanly (exit 0, no
+  error) but silently answers a different question (total line count,
+  not matching lines). A reviewer skimming for "did it run" rather than
+  "does this argv actually answer the question" would approve a wrong
+  answer with total confidence. brokkr's review step shows the exact
+  argv precisely so this kind of mistake is checkable, but it cannot
+  make the human actually check it.
+- **"Write a script that does X" is a materially weaker category than a
+  single command, across models, not just a qwen2.5-coder:7b quirk.**
+  Asked to "write a bash script called report.sh that prints disk usage
+  and free memory" (four similarly-phrased script-writing tasks were
+  tried; this one failed hardest), qwen2.5-coder:7b wrote a `report.sh`
+  whose content was the literal, unescaped *output* of `df`/`free`
+  (an `echo "...\n$(df -h)..."` without `-e`, so the `\n` never became a
+  real newline) and then tried to run that data file as a script,
+  producing a wall of "command not found" errors for each output line.
+  Asked the identical task with `llama3.1:8b` instead, the failure mode
+  was different but no better: it proposed running
+  `bash -c '/bin/bash /workspace/report.sh'` -- executing a script it
+  had never actually created, failing immediately with "No such file or
+  directory." A third and fourth script-writing task in the same batch
+  ("backup.sh", "smart-check.sh", "cleanup.sh") produced a working
+  script for two of them and, for "backup.sh", no saved script file at
+  all -- the model just performed the backup once inline instead of
+  saving something reusable. The common thread: single, direct commands
+  (`grep`, `du`, `find`, `chmod`) were reliable in testing; anything
+  requiring the model to reason about *creating a reusable artifact*
+  versus *performing an action now* was not, regardless of which local
+  model answered. Don't trust brokkr output for this task shape without
+  reading the actual saved file, and don't assume switching the
+  configured model fixes it -- try a different approach to the task
+  instead (see the "possible eventual convergence" note in
+  docs/architecture.md about looking up an already-known-good script
+  instead of generating a new one).
+
+  A more precise task description fixed this in further testing: asking
+  qwen2.5-coder:7b to "create a reusable bash script file at report.sh
+  that prints disk usage and free memory when run later. Only write the
+  script file with proper newlines, do not execute it now" produced a
+  correct, working script -- multiple separate `echo` lines instead of
+  one string with literal `\n`, and no premature execution. The
+  unreliability isn't a hard ceiling; vague phrasing ("write a script
+  that does X") is what triggers it, and being explicit about "save,
+  don't run" and "use real newlines" measurably helps, the same lesson
+  already documented for the ping/dmesg/file-guessing system-prompt
+  fixes elsewhere in this project. Still verify the saved file's actual
+  content before trusting it.
+
+  One more property worth knowing before relying on a brokkr-generated
+  script: its paths are written in terms of `/workspace`, which only
+  resolves inside brokkr's sandbox -- `SandboxConfig.workdir_container`
+  is a fixed `/workspace` for every brokkr installation, not something
+  `.env` can change. A script like this can be shared directly between
+  any two people running brokkr (the path always resolves the same way
+  for both, regardless of what their real host directory is named or
+  which machine it's on) -- but it will fail if run standalone outside
+  brokkr (a real shell, a cron job, a machine without brokkr installed)
+  unless `/workspace` is first rewritten to wherever the real files
+  actually live. A brokkr-generated script is portable across brokkr
+  installations, not portable as a general-purpose standalone tool.
 - **Multi-tenant isolation.** There is no user model. Anyone who can run
   the `brokkr` CLI has the same access as anyone else who can. This is a
   single-operator tool.

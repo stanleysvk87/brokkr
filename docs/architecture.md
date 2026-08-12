@@ -145,3 +145,23 @@ human-authored per rule (a path glob, an enum of allowed values, a
 regex someone actually wrote) — never a pattern the model itself infers
 or proposes, since that would reintroduce exactly the "the model decides
 what's safe to skip" problem exact-match was designed to avoid.
+
+## Possible eventual convergence: looking up a known-good script instead of generating one
+
+Dogfooding found that "write a script that does X and save it as a
+reusable file" is a materially less reliable task shape than a single
+direct command, across more than one local model — see
+docs/security-model.md's "What this deliberately does not defend
+against" section for the specific reproduced failures. Asking the model
+to generate fresh multi-line script content from scratch every time is
+one way to hit this task shape; it is not the only way to accomplish it.
+
+A curated catalog of already-written, already-tested scripts (were one
+available to query) sidesteps the generation-reliability problem
+entirely for anything already in it: instead of the model authoring new
+code, the task becomes "find the existing script that matches this
+description," which is a much easier and more checkable problem than
+generating correct multi-line shell code. This is not designed or
+scoped — noted here only as a more promising direction than "try a
+bigger model" for this specific task shape, should script generation
+ever become a priority.
