@@ -149,6 +149,13 @@ class DockerSandbox:
             # Stage 1 manual testing: uid 10001 got "Permission denied" on
             # a plain `touch` inside /workspace before this fix.
             user=f"{os.getuid()}:{os.getgid()}",
+            # The host uid above has no matching /etc/passwd entry inside
+            # the container (only root and the image's own uid 10001 do),
+            # so without this, $HOME defaults to "/" -- unwritable, which
+            # broke `pip`'s cache (a warning) and `git config --global`
+            # (a hard "Permission denied" failure), both found by manually
+            # dogfooding real tasks through `brokkr propose` after Stage 3.
+            environment={"HOME": sandbox.workdir_container},
             volumes={
                 str(sandbox.workdir_host): {
                     "bind": sandbox.workdir_container,

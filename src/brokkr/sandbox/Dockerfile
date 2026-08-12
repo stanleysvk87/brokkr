@@ -18,8 +18,19 @@ RUN apt-get update \
         git \
         python3 \
         python3-pip \
+        python-is-python3 \
         procps \
     && rm -rf /var/lib/apt/lists/*
+
+# Debian's system Python refuses `pip install` outside a venv by default
+# (PEP 668, "externally-managed-environment"). That protection exists to
+# stop a stray pip install from breaking a real, persistent machine's
+# system packages -- a concern that doesn't really apply here, since this
+# entire filesystem is disposable and gets recreated from this image on
+# every `brokkr sandbox reset`. Found by manually dogfooding a real
+# "install a package" task through `brokkr propose`, which failed outright
+# without this.
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
 USER brokkr
 WORKDIR /workspace

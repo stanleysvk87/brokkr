@@ -158,3 +158,43 @@ This closes out the plan in
 `~/.claude/plans/partitioned-fluttering-sonnet.md` -- Stages 0 through
 4 are all done. What's left before a public GitHub repo is a human
 read-through of the whole thing, not more building.
+
+## Dogfooding pass: 3 real bugs found and fixed — 2026-08-12
+
+Manually ran a round of realistic `brokkr propose` tasks (create files,
+install a package, configure git, an intentionally vague "clean up the
+workspace" prompt) rather than only the scripted Stage 1-3 verification
+scenarios. Found and fixed:
+
+- **Approved commands could silently never run.** `brokkr propose`
+  asked "remember this?" *after* recording the approval decision but
+  *before* actually executing the command. An interrupted or EOF'd
+  answer to that optional follow-up question (Ctrl-D, Ctrl-C, or stdin
+  simply closing) aborted the whole process with a bare "Aborted.",
+  discarding a command that was already approved and had a `decisions`
+  row saying so, but no matching `commands` row -- reproduced and
+  confirmed via `logs/audit.db` before fixing. Execution now happens
+  immediately after approval; the remember question comes after, and
+  any failure answering it is caught and ignored rather than able to
+  affect the command's already-determined outcome or exit code.
+- **`$HOME` was unwritable inside the sandbox**, a side effect of the
+  Stage 1 host-uid fix: the container's `/etc/passwd` has no entry for
+  an arbitrary host uid, so `$HOME` defaulted to `/`. Broke `pip`'s
+  cache (a warning) and `git config --global` (a hard failure). Fixed
+  by explicitly setting `HOME=/workspace` when the container starts.
+- **`pip install` failed outright** on Debian's system Python (PEP 668,
+  "externally-managed-environment") -- a protection meant for a real,
+  persistent machine that doesn't meaningfully apply to a filesystem
+  that's disposable and recreated from the image on every `sandbox
+  reset`. Fixed with `PIP_BREAK_SYSTEM_PACKAGES=1` in the Dockerfile.
+
+Also added `python-is-python3` to the sandbox image after a proposed
+`python --version` failed with "command not found" -- only `python3`
+existed, which is correct Debian convention but not what most people
+(or models) type by default.
+
+All three fixes verified manually afterward: the interrupted-prompt
+case not aborting, `git config --global` succeeding, and `pip install`
+succeeding with `BROKKR_SANDBOX_NETWORK=bridge` (still correctly
+failing on DNS resolution with the default `--network none`, which is
+the isolation working as intended, not a bug).

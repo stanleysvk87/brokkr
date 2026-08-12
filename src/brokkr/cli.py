@@ -187,9 +187,15 @@ def propose(
 
     if remembered is not None:
         approvals.mark_used(remembered.command_hash)
-    elif Confirm.ask("Remember this exact command so it skips confirmation next time?", default=False):
-        approvals.remember(final_argv, task_description=task)
 
+    # Execution happens before the "remember?" follow-up question,
+    # deliberately -- a human dogfooding this surfaced a real bug where
+    # the opposite order meant an interrupted/EOF'd answer to "remember?"
+    # (Ctrl-D, Ctrl-C, or stdin simply closing) aborted the whole command
+    # with a bare "Aborted.", silently discarding an ALREADY-APPROVED
+    # command that had a recorded "approved" decision but never actually
+    # ran. Once a command is approved, nothing optional should be able to
+    # prevent it from running.
     sandbox = DockerSandbox(settings)
     try:
         exec_result = sandbox.exec(final_argv, timeout=timeout)
@@ -208,6 +214,21 @@ def propose(
     console.print(
         f"\n[dim]-- {status}, {exec_result.duration_ms:.0f}ms, command_id={command_id}[/dim]"
     )
+
+    if remembered is None:
+        # Broad catch is deliberate: this question is purely optional
+        # follow-up after the real work already happened and was already
+        # reported above -- nothing raised here should change this
+        # command's outcome or exit code.
+        try:
+            if Confirm.ask(
+                "Remember this exact command so it skips confirmation next time?",
+                default=False,
+            ):
+                approvals.remember(final_argv, task_description=task)
+        except Exception:  # noqa: BLE001, S110 -- deliberately blind, see comment above
+            pass
+
     raise typer.Exit(code=124 if exec_result.timed_out else exec_result.exit_code)
 
 
