@@ -85,6 +85,18 @@ reused across calls to `docker exec` into it — not a fresh `docker run
 --rm` per command — so a sequence like "install a package, then use it"
 works across separate `brokkr propose`/`sandbox exec` invocations.
 
+Container reuse does not mean the commands share one persistent shell.
+Each invocation starts a new process tree with the container's configured
+environment, so a variable exported by one `bash -c` command is absent
+from the next. Files written to `/workspace` do persist, as do changes to
+the container rootfs, because both invocations use the same container.
+Detached background processes can persist too: a process that does not
+keep the initiating exec's streams open is reparented to container PID 1
+when its shell exits and continues consuming the sandbox's PID, memory,
+and CPU allowances until it exits, is killed explicitly, or the sandbox
+is reset. Later execs still work, but they do not implicitly clean up or
+inherit that process's environment.
+
 Its rootfs is never modified in place across a reset: `brokkr sandbox
 reset` stops and removes the container entirely, and the next command
 recreates it from the image, fresh. Nothing about the container's

@@ -297,3 +297,32 @@ deliberately-chosen tools (same reasoning as `python-is-python3`: not
 Rebuilt the image and re-ran the same task -- the model correctly
 proposed `jq -r .version /workspace/data.json` once the tool existed to
 support it.
+
+## Sandbox lifecycle clarity and ZIP tooling — 2026-08-12
+
+Tested state across separate `brokkr sandbox exec` invocations to make
+the long-lived-container behavior concrete. An environment variable
+exported inside one `bash -c` process was absent from the next invocation,
+while a file written to `/workspace` remained visible. A detached
+`sleep 300` also remained alive after its initiating exec returned: it
+was reparented to container PID 1, consumed one slot from the PID cgroup,
+and did not stop later commands from running. Updated the architecture
+document to distinguish persistent filesystem/process state from
+non-persistent per-exec shell state, and to make `sandbox reset` the
+explicit cleanup boundary for forgotten background work.
+
+A real ZIP task exposed another small tooling gap. The model chose the
+standard `zip` utility (after human correction added its missing `-r`
+flag), but execution failed cleanly with exit 127 because neither `zip`
+nor `unzip` was installed. Added both packages to the deliberately small
+sandbox image, rebuilt it, repeated the corrected archive command, and
+verified the result with `unzip -t`; both files passed the integrity
+check.
+
+Also verified `brokkr propose --model` against an installed non-default
+model: `qwen3:4b` produced a valid structured proposal and the audit
+database recorded that exact model. No installed model was known to lack
+structured-output support, so the failure path was checked with an
+unavailable model override instead; it returned a clean proposal error
+and exit 1, with the requested model and HTTP 404 stored in the audit
+row rather than raising a traceback.
