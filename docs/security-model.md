@@ -49,8 +49,37 @@ development (see CHANGELOG.md's Stage 1 entry for the full detail):
   actually killed (not just reported as timed out) by inspecting the
   container's process list afterward, and confirmed no runaway process
   was left consuming resources.
+- **A memory allocation beyond the cgroup limit.** `docker inspect` and
+  the container's cgroup files both reported a 2 GiB RAM limit. Docker's
+  default configuration also allowed 2 GiB of swap, so a touched 3 GiB
+  allocation completed through swap; this is why a test must exceed the
+  combined 4 GiB ceiling rather than assume 2 GiB is a total-allocation
+  limit. A Python process that attempted a 5 GiB allocation while
+  touching every page was killed with exit 137, and `memory.events`
+  recorded the OOM kill. The
+  container itself remained running with only its init process and
+  accepted a normal follow-up command.
+- **A legitimate-looking runaway process loop against the PID limit.**
+  With both Docker and the container cgroup reporting a limit of 256, a
+  Python loop attempting to start 400 sleeping child processes stopped
+  at 253 children with `EAGAIN` while `pids.current` was exactly 256.
+  The cgroup's limit-hit counter increased, every child was then reaped,
+  the container returned to its single init process, and a follow-up
+  command succeeded.
+- **Symlinks pointing outside `/workspace`.** A symlink from the mounted
+  workspace to `/etc` resolved inside the container's filesystem
+  namespace: a file read through the link had the same hash as the
+  container's direct `/etc` path and a different hash from the host's
+  corresponding file. A write through the link failed with permission
+  denied under the sandbox user and created no file in either the
+  container or host `/etc`.
 - **A network request to an external host with `--network none`.**
   Confirmed it failed to connect, not just failed slowly.
+- **A root-only package installation as the sandbox user.** `apt-get
+  install` exited 100 immediately with an explicit permission-denied
+  error for the dpkg frontend lock and asked whether the caller was root.
+  No package-manager process remained, and the container accepted a
+  follow-up command normally.
 - **A non-zero exit code and normal successful output**, to confirm
   those ordinary cases are reported accurately and not silently
   swallowed or misreported as something else.
