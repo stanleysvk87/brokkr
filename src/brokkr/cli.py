@@ -18,6 +18,7 @@ identical proposal skips the confirmation prompt entirely; anything else
 is reviewed fresh every time.
 
 `brokkr approvals ...` lists and revokes remembered commands.
+`brokkr memory ...` explicitly manages human-curated workspace context.
 """
 
 from __future__ import annotations
@@ -34,14 +35,17 @@ from brokkr.approvals.store import ApprovalStore
 from brokkr.audit.store import AuditStore
 from brokkr.config import load_settings
 from brokkr.llm.client import OllamaClient
+from brokkr.memory.store import MemoryStore
 from brokkr.permissions.policy import check_prohibited
 from brokkr.sandbox.docker_sandbox import DockerSandbox, SandboxError
 
 app = typer.Typer(help="brokkr -- a local, sandboxed, tool-augmented LLM agent.")
 sandbox_app = typer.Typer(help="Direct control of the Docker sandbox (Stage 1, no LLM).")
 approvals_app = typer.Typer(help="List and revoke remembered (auto-approved) commands.")
+memory_app = typer.Typer(help="Manage human-curated context for future proposals.")
 app.add_typer(sandbox_app, name="sandbox")
 app.add_typer(approvals_app, name="approvals")
+app.add_typer(memory_app, name="memory")
 
 console = Console()
 
@@ -137,10 +141,12 @@ def propose(
     settings = load_settings()
     audit = AuditStore(settings)
     approvals = ApprovalStore(settings)
+    memory = MemoryStore(settings)
     command_id = audit.new_command_id()
 
     client = OllamaClient(settings)
-    result = client.propose(task, model=model)
+    notes = memory.recent(settings.memory_max_notes)
+    result = client.propose(task, model=model, notes=[entry.note for entry in notes])
     audit.record_proposal(command_id, result)
 
     if result.error:
@@ -266,6 +272,42 @@ def approvals_revoke(
         console.print(f"[green]revoked approval {approval_id}[/green]")
     else:
         console.print(f"[yellow]no approval with id {approval_id}[/yellow]")
+        raise typer.Exit(code=1)
+
+
+@memory_app.command("add")
+def memory_add(note: str = typer.Argument(..., help="Workspace context to remember.")) -> None:
+    """Adds an explicit human-authored note for future proposals."""
+    settings = load_settings()
+    entry = MemoryStore(settings).add(note)
+    console.print(f"[green]added memory {entry.id}[/green]")
+
+
+@memory_app.command("list")
+def memory_list() -> None:
+    """Lists workspace notes, most recent first."""
+    settings = load_settings()
+    notes = MemoryStore(settings).list_all()
+    if not notes:
+        console.print("[yellow]no memory notes[/yellow]")
+        return
+
+    table = Table("id", "note", "created")
+    for entry in notes:
+        table.add_row(str(entry.id), entry.note, entry.created_at)
+    console.print(table)
+
+
+@memory_app.command("forget")
+def memory_forget(
+    note_id: int = typer.Argument(..., help="id shown by `brokkr memory list`."),
+) -> None:
+    """Removes a workspace note from future proposal context."""
+    settings = load_settings()
+    if MemoryStore(settings).forget(note_id):
+        console.print(f"[green]forgot memory {note_id}[/green]")
+    else:
+        console.print(f"[yellow]no memory with id {note_id}[/yellow]")
         raise typer.Exit(code=1)
 
 

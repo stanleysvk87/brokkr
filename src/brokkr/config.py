@@ -43,6 +43,7 @@ class Settings(BaseModel):
     log_level: str
     sandbox: SandboxConfig
     approval_template_matching: bool
+    memory_max_notes: int = 20
 
     @property
     def audit_db_path(self) -> Path:
@@ -59,6 +60,10 @@ class Settings(BaseModel):
     @property
     def approvals_db_path(self) -> Path:
         return self.data_dir / "approvals.db"
+
+    @property
+    def memory_db_path(self) -> Path:
+        return self.data_dir / "memory.db"
 
 
 def _resolve_dir(value: str) -> Path:
@@ -110,4 +115,5 @@ def load_settings(env_file: Path | None = None) -> Settings:
         log_level=os.environ.get("BROKKR_LOG_LEVEL", "INFO").upper(),
         sandbox=sandbox_config,
         approval_template_matching=_bool_env("BROKKR_APPROVAL_TEMPLATE_MATCHING", False),
+        memory_max_notes=int(os.environ.get("BROKKR_MEMORY_MAX_NOTES", "20")),
     )

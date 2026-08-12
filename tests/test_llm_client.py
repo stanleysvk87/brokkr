@@ -12,7 +12,7 @@ import httpx
 import pytest
 
 from brokkr.config import SandboxConfig, Settings
-from brokkr.llm.client import OllamaClient
+from brokkr.llm.client import _SYSTEM_PROMPT, OllamaClient
 
 
 @pytest.fixture
@@ -45,6 +45,46 @@ def test_propose_returns_proposal_on_valid_response(monkeypatch, settings):
     assert result.error is None
     assert result.proposal is not None
     assert result.proposal.argv == ["ls", "-la"]
+
+
+@pytest.mark.parametrize("notes", [None, []])
+def test_propose_without_notes_preserves_existing_payload(monkeypatch, settings, notes):
+    valid_content = json.dumps({"reasoning": "because", "argv": ["ls"]})
+    captured = {}
+
+    def _capture(*args, **kwargs):
+        captured.update(kwargs["json"])
+        return _fake_response(valid_content)
+
+    monkeypatch.setattr(httpx, "post", _capture)
+
+    OllamaClient(settings).propose("list files", notes=notes)
+
+    assert captured["messages"] == [
+        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "user", "content": "list files"},
+    ]
+
+
+def test_propose_includes_notes_in_chronological_order(monkeypatch, settings):
+    valid_content = json.dumps({"reasoning": "because", "argv": ["ls"]})
+    captured = {}
+
+    def _capture(*args, **kwargs):
+        captured.update(kwargs["json"])
+        return _fake_response(valid_content)
+
+    monkeypatch.setattr(httpx, "post", _capture)
+
+    OllamaClient(settings).propose(
+        "list files", notes=["uses Python", "tests run with pytest"]
+    )
+
+    assert captured["messages"][1]["role"] == "system"
+    assert captured["messages"][1]["content"].endswith(
+        "- uses Python\n- tests run with pytest"
+    )
+    assert captured["messages"][2] == {"role": "user", "content": "list files"}
 
 
 def test_propose_errors_on_malformed_json(monkeypatch, settings):

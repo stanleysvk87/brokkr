@@ -226,3 +226,28 @@ not just a politely-worded system prompt. Reproduced live against the
 real Ollama server afterward (a different but structurally identical
 proposal for the same task) and confirmed it's now caught with a clear
 message instead of silently executing something broken.
+
+## Stage 5: local memory for propose — 2026-08-12
+
+`brokkr propose` can now use lasting workspace context without silently
+inferring anything from command output or duplicating the audit trail.
+The operator manages notes explicitly with `brokkr memory add`, `brokkr
+memory list`, and `brokkr memory forget`; the most recent configured
+number of notes is supplied to the model in chronological order as
+helpful, potentially outdated context.
+An empty memory store leaves the existing Ollama request payload
+unchanged.
+
+Added a small, separate SQLite store at `data/memory.db`, following the
+same WAL-backed pattern as exact-match approvals. The schema deliberately
+contains only note text and creation time: no automatic fact extraction,
+semantic matching, tags, importance guesses, or expiry. Added
+`BROKKR_MEMORY_MAX_NOTES` (default 20) so accumulated human notes cannot
+make proposal prompts grow without bound.
+
+Manually verified adding and listing a note, making a real proposal with
+that note included as context, then forgetting it and confirming the
+list was empty again. The full test suite and Ruff checks passed, including
+new coverage for add/list/forget, recency ordering and limits, empty
+state, context-bearing LLM payloads, and byte-identical message structure
+when notes are empty or omitted.

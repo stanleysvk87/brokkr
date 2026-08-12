@@ -119,19 +119,33 @@ class OllamaClient:
         self._default_model = settings.default_model
         self._timeout = httpx.Timeout(connect=5.0, read=180.0, write=10.0, pool=5.0)
 
-    def propose(self, task_description: str, model: str | None = None) -> ProposalResult:
+    def propose(
+        self,
+        task_description: str,
+        model: str | None = None,
+        notes: list[str] | None = None,
+    ) -> ProposalResult:
         """Asks the model to propose a single command for task_description.
         Never raises -- network/HTTP/parsing failures all come back as a
         ProposalResult with `error` set and `proposal` left None, so
         callers (the CLI, and eventually Stage 3's approval flow) have one
         place to check instead of a try/except around every call site."""
         effective_model = model or self._default_model
+        messages = [{"role": "system", "content": _SYSTEM_PROMPT}]
+        if notes:
+            context = (
+                "Known context about this workspace, provided by the human operator "
+                "across earlier sessions (may be incomplete or outdated -- treat as "
+                "helpful background, not as ground truth that overrides what you can "
+                "see in the task itself):\n"
+                + "\n".join(f"- {note}" for note in notes)
+            )
+            messages.append({"role": "system", "content": context})
+        messages.append({"role": "user", "content": task_description})
+
         payload = {
             "model": effective_model,
-            "messages": [
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {"role": "user", "content": task_description},
-            ],
+            "messages": messages,
             "stream": False,
             "format": _PROPOSAL_JSON_SCHEMA,
         }
