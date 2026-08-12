@@ -8,12 +8,16 @@ process, a network call -- and it deliberately has no policy blocklist
 gate of its own, since that verification depends on catastrophic
 commands actually reaching the sandbox mechanism.
 
-`brokkr propose` (Stage 2) is where a model gets involved: it proposes a
-command, a human approves/edits/rejects it, and only *then* -- right
+`brokkr propose` (Stage 2+3) is where a model gets involved: it proposes
+a command, a human approves/edits/rejects it, and only *then* -- right
 before anything runs -- does permissions/policy.py's static blocklist get
 checked, as defense in depth on top of the Docker boundary that Stage 1
-already proved. Still no approval memory here; every proposal is reviewed
-fresh (that's Stage 3).
+already proved. If a human has previously chosen to remember an *exact*
+argv (see approvals/store.py -- never a fuzzy/semantic match), a later
+identical proposal skips the confirmation prompt entirely; anything else
+is reviewed fresh every time.
+
+`brokkr approvals ...` lists and revokes remembered commands.
 """
 
 from __future__ import annotations
@@ -22,10 +26,11 @@ import shlex
 
 import typer
 from rich.console import Console
-from rich.prompt import Prompt
+from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
 from brokkr import __version__
+from brokkr.approvals.store import ApprovalStore
 from brokkr.audit.store import AuditStore
 from brokkr.config import load_settings
 from brokkr.llm.client import OllamaClient
@@ -34,7 +39,9 @@ from brokkr.sandbox.docker_sandbox import DockerSandbox, SandboxError
 
 app = typer.Typer(help="brokkr -- a local, sandboxed, tool-augmented LLM agent.")
 sandbox_app = typer.Typer(help="Direct control of the Docker sandbox (Stage 1, no LLM).")
+approvals_app = typer.Typer(help="List and revoke remembered (auto-approved) commands.")
 app.add_typer(sandbox_app, name="sandbox")
+app.add_typer(approvals_app, name="approvals")
 
 console = Console()
 
@@ -121,12 +128,15 @@ def propose(
     ),
 ) -> None:
     """Asks the model to propose a command for TASK, shows you its
-    reasoning, and lets you run it as-is, edit it, or reject it. Nothing
-    runs without that confirmation, and the proposal, your decision, and
-    (if anything ran) the execution are all recorded under one shared
-    command_id -- see logs/audit.db."""
+    reasoning, and lets you run it as-is, edit it, or reject it -- unless
+    that exact command was already remembered from an earlier session, in
+    which case it runs without asking again. Nothing else runs without
+    confirmation, and the proposal, your decision, and (if anything ran)
+    the execution are all recorded under one shared command_id -- see
+    logs/audit.db."""
     settings = load_settings()
     audit = AuditStore(settings)
+    approvals = ApprovalStore(settings)
     command_id = audit.new_command_id()
 
     client = OllamaClient(settings)
@@ -142,23 +152,31 @@ def propose(
     console.print(f"[dim]reasoning:[/dim] {proposal.reasoning}")
     console.print(f"[bold]command:[/bold] {shlex.join(proposal.argv)}")
 
-    choice = Prompt.ask(
-        "Run this? [y]es / [e]dit / [n]o", choices=["y", "e", "n"], default="n"
-    )
-
-    if choice == "n":
-        audit.record_decision(command_id, "rejected", None)
-        console.print("[yellow]rejected, nothing ran[/yellow]")
-        raise typer.Exit(code=0)
-
-    if choice == "e":
-        edited = Prompt.ask("Edit command", default=shlex.join(proposal.argv))
-        final_argv = shlex.split(edited)
-        decision = "edited"
-    else:
+    remembered = approvals.find(proposal.argv)
+    if remembered is not None:
+        console.print("[cyan](remembered -- running without asking)[/cyan]")
         final_argv = proposal.argv
-        decision = "approved"
+        decision = "auto_approved"
+    else:
+        choice = Prompt.ask(
+            "Run this? [y]es / [e]dit / [n]o", choices=["y", "e", "n"], default="n"
+        )
 
+        if choice == "n":
+            audit.record_decision(command_id, "rejected", None)
+            console.print("[yellow]rejected, nothing ran[/yellow]")
+            raise typer.Exit(code=0)
+
+        if choice == "e":
+            edited = Prompt.ask("Edit command", default=shlex.join(proposal.argv))
+            final_argv = shlex.split(edited)
+            decision = "edited"
+        else:
+            final_argv = proposal.argv
+            decision = "approved"
+
+    # Always checked, even for a remembered command -- policy.py can gain
+    # new rules after a command was remembered under an older version.
     blocked_reason = check_prohibited(final_argv)
     if blocked_reason is not None:
         audit.record_decision(command_id, "blocked", final_argv, reason=blocked_reason)
@@ -166,6 +184,11 @@ def propose(
         raise typer.Exit(code=1)
 
     audit.record_decision(command_id, decision, final_argv)
+
+    if remembered is not None:
+        approvals.mark_used(remembered.command_hash)
+    elif Confirm.ask("Remember this exact command so it skips confirmation next time?", default=False):
+        approvals.remember(final_argv, task_description=task)
 
     sandbox = DockerSandbox(settings)
     try:
@@ -186,6 +209,43 @@ def propose(
         f"\n[dim]-- {status}, {exec_result.duration_ms:.0f}ms, command_id={command_id}[/dim]"
     )
     raise typer.Exit(code=124 if exec_result.timed_out else exec_result.exit_code)
+
+
+@approvals_app.command("list")
+def approvals_list() -> None:
+    """Lists every remembered (auto-approved) exact command."""
+    settings = load_settings()
+    approvals = ApprovalStore(settings)
+    remembered = approvals.list_all()
+    if not remembered:
+        console.print("[yellow]no remembered commands[/yellow]")
+        return
+
+    table = Table("id", "command", "task", "used", "created")
+    for entry in remembered:
+        table.add_row(
+            str(entry.id),
+            shlex.join(entry.argv),
+            entry.task_description or "",
+            str(entry.use_count),
+            entry.created_at,
+        )
+    console.print(table)
+
+
+@approvals_app.command("revoke")
+def approvals_revoke(
+    approval_id: int = typer.Argument(..., help="id shown by `brokkr approvals list`."),
+) -> None:
+    """Forgets a remembered command -- it goes back to asking for
+    confirmation every time."""
+    settings = load_settings()
+    approvals = ApprovalStore(settings)
+    if approvals.revoke(approval_id):
+        console.print(f"[green]revoked approval {approval_id}[/green]")
+    else:
+        console.print(f"[yellow]no approval with id {approval_id}[/yellow]")
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

@@ -103,3 +103,37 @@ across all three tables for each case.
 
 Stage 3 (an `approved_commands` table + exact-match lookup, so a
 previously-approved command doesn't need re-confirming) is next.
+
+## Stage 3: remembered exact-match approvals — 2026-08-12
+
+After running a proposed command, `brokkr propose` now offers to
+remember its exact argv; a later proposal producing that identical argv
+runs immediately, no confirmation prompt. Added `approvals/store.py`
+(`ApprovalStore`, its own `data/approvals.db`, separate from the audit
+trail on purpose -- one is curated state, the other an append-only
+record) and `brokkr approvals list/revoke`.
+
+Matching is exact-only: the stored key is a sha256 of the canonical
+JSON-encoded argv array, nothing fuzzier. Template/generalized matching
+(e.g. "same command, any file") was deliberately left out of this store
+entirely rather than built and left half-off behind a flag -- semantic
+similarity was already rejected during planning as unsafe for a
+decision that skips human review, and a real generalized-matching
+design (human-authored constraints only, never model-inferred) is real
+scope for a later stage, not a checkbox to bolt on here.
+
+The policy blocklist still runs even for a remembered command --
+verified by design, not by a new test, since it's the same code path
+Stage 2 already exercises regardless of how `final_argv` was decided.
+
+Manually verified end-to-end: remembered a command, then re-proposed
+the identical task with `< /dev/null` (no stdin available at all) --
+it ran without any prompt, which is only possible if confirmation was
+genuinely skipped rather than silently defaulted. Confirmed `use_count`
+incremented on the remembered entry, and that `approvals revoke`
+removes it and reverts to asking again.
+
+Stage 4 (public-release documentation: full README, security-model
+doc, SECURITY.md, CONTRIBUTING.md) is next -- Stages 0-3 cover
+everything the plan called the core, riskiest mechanism; what's left
+is making the project legible to someone who didn't build it.
