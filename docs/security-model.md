@@ -83,6 +83,20 @@ development (see CHANGELOG.md's Stage 1 entry for the full detail):
 - **A non-zero exit code and normal successful output**, to confirm
   those ordinary cases are reported accurately and not silently
   swallowed or misreported as something else.
+- **Adversarial task descriptions and explicit memory notes.** Fake system
+  and developer messages, claims that destructive commands were already
+  approved, and persistent memory instructions were sent through the real
+  proposal flow. The model could be induced to propose `rm -rf /workspace`,
+  `mkfs`, raw-device `dd`, and a recognizable fork bomb. Every proposal still
+  required a human decision; direct blocklisted forms were recorded as blocked
+  after approval and created no execution row. Closing stdin at the approval
+  prompt aborted rather than implicitly approving. Two malicious memory notes
+  did not override unrelated tasks in these tests, but that model behavior is
+  not relied on as a security property.
+- **Malformed adversarial output.** A prompt that induced an empty argv was
+  rejected cleanly by the deterministic proposal validator before approval or
+  execution. A requested bare pipe was instead repaired by the model into an
+  explicit `bash -c` command and still required human review.
 
 If you find a way past any of these four properties, that's a real
 security bug — see "Reporting a vulnerability" below, not a public
@@ -111,7 +125,7 @@ issue.
 ## Defense-in-depth layers, and why they exist despite not being the real boundary
 
 - **`permissions/policy.py`'s static blocklist** exists to give a fast,
-  auditable "never even considered" rejection for a short list of known
+  auditable "never executed" rejection for a short list of known
   catastrophic patterns (`rm -rf /`, `dd` to a raw block device, `mkfs`,
   recognizable fork bombs), and to avoid needlessly destroying and
   rebuilding the sandbox rootfs for commands that were never going

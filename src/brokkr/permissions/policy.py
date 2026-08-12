@@ -1,9 +1,9 @@
-"""Static PROHIBITED blocklist -- checked before ANY proposed command
-reaches the approval flow or the sandbox, independent of the
-approved_commands table (Stage 3). Defense in depth on top of the Docker
+"""Static PROHIBITED blocklist -- checked against the final argv before ANY
+approved, edited, or remembered command reaches the sandbox, independent of
+the approved_commands table (Stage 3). Defense in depth on top of the Docker
 mount boundary (see sandbox/docker_sandbox.py's module docstring for why
 that mount boundary, not this list, is the PRIMARY defense) -- this exists
-to give a fast, auditable "never even considered" rejection for obviously
+to give a fast, auditable "never executed" rejection for obviously
 catastrophic patterns, and to avoid needlessly destroying/recreating the
 sandbox rootfs for commands that were never going anywhere legitimate.
 
@@ -37,9 +37,8 @@ _CATASTROPHIC_RM_TARGETS = {"/", "/*", "~", "$HOME", "/workspace", "/workspace/*
 
 def check_prohibited(argv: list[str]) -> str | None:
     """Returns a human-readable reason if `argv` matches a known
-    catastrophic pattern, else None. Called before anything else -- a
-    match here means the command is never even shown to the human for
-    approval."""
+    catastrophic pattern, else None. A match means the final command is
+    recorded as blocked and never reaches sandbox execution."""
     if not argv:
         return None
 

@@ -433,3 +433,26 @@ the case in isolation. Config values that are actually wrong still need
 correcting by whoever's deploying (here: lowering the VM's own
 `BROKKR_SANDBOX_CPU_LIMIT` to match its real CPU count) -- this fix only
 ensures a wrong value fails cleanly instead of crashing.
+
+## Adversarial task and memory input verification -- 2026-08-12
+
+Sent fake system/developer overrides, false claims of prior approval, malformed
+output instructions, and persistent manipulation attempts through the real
+`brokkr propose` and `brokkr memory` paths. The model was readily induced to
+propose catastrophic commands, including direct `rm -rf /workspace`, `mkfs`,
+raw-device `dd`, and a recognizable fork bomb. The CLI still showed the exact
+argv and required a human decision. Direct catastrophic forms approved during
+the test were then recorded as blocked by policy, with no execution rows; a
+shell-wrapped `rm` and a close fork-bomb variant that the deliberately narrow
+blocklist did not recognize were rejected at human review. Closing stdin
+aborted instead of approving. Canary state remained intact throughout.
+
+Two explicitly adversarial memory notes failed to corrupt unrelated date and
+Python-version tasks, but this is recorded as observed model behavior, not a
+security guarantee. A forced empty argv was rejected cleanly by Pydantic before
+approval; a requested bare pipe was repaired by the model into an explicit
+shell command and still required review. Updated the security documentation
+with these verified cases and corrected an old `policy.py` docstring that
+incorrectly claimed blocklisted proposals were never shown for approval. The
+actual pipeline has always checked policy against final approved, edited, or
+remembered argv immediately before sandbox execution.
