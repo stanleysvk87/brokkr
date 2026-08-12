@@ -1,0 +1,35 @@
+# Secrets / personal config -- never commit, .env.example documents every var instead
+.env
+.env.*
+!.env.example
+config.toml
+!config.example.toml
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# Data / logs -- may contain full command output, sandbox state, local history
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/*.db-journal
+logs/*.jsonl
+logs/*.log
+logs/blobs/
+
+# Sandbox workspace -- host-side mount target, never part of the repo
+brokkr-workspace/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.DS_Store

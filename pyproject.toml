@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "brokkr"
+version = "0.1.0"
+description = "A local, tool-augmented LLM agent that can propose and (after human confirmation) execute shell commands inside a Docker sandbox, with exhaustive logging."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "httpx>=0.28,<0.29",
+    "typer>=0.23,<0.24",
+    "rich>=14.3,<15",
+    "pydantic>=2.12,<3",
+    "python-dotenv>=1.2,<2",
+    "docker>=5.0,<6",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3,<9",
+    "ruff>=0.9,<1",
+]
+
+[project.scripts]
+brokkr = "brokkr.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
