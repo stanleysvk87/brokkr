@@ -8,14 +8,13 @@ process, a network call -- and it deliberately has no policy blocklist
 gate of its own, since that verification depends on catastrophic
 commands actually reaching the sandbox mechanism.
 
-`brokkr propose` (Stage 2+3) is where a model gets involved: it proposes
-a command, a human approves/edits/rejects it, and only *then* -- right
-before anything runs -- does permissions/policy.py's static blocklist get
-checked, as defense in depth on top of the Docker boundary that Stage 1
-already proved. If a human has previously chosen to remember an *exact*
-argv (see approvals/store.py -- never a fuzzy/semantic match), a later
-identical proposal skips the confirmation prompt entirely; anything else
-is reviewed fresh every time.
+`brokkr propose` (Stage 2+) is where a model gets involved: it proposes a
+command, a human approves/edits/rejects it, and only *then* -- right before
+anything runs -- does permissions/policy.py's static blocklist get checked,
+as defense in depth on top of the Docker boundary that Stage 1 already
+proved. Exact remembered argv can skip review. When explicitly enabled,
+human-authored templates can do the same for constrained variable positions;
+the model never selects positions or constraints.
 
 `brokkr approvals ...` lists and revokes remembered commands.
 `brokkr memory ...` explicitly manages human-curated workspace context.
@@ -34,7 +33,13 @@ from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
 from brokkr import __version__
-from brokkr.approvals.store import ApprovalStore
+from brokkr.approvals.store import (
+    ApprovalStore,
+    ApprovalTemplate,
+    TemplateConstraint,
+    TemplateValidationError,
+    format_template,
+)
 from brokkr.audit.store import AuditStore, ManualDecision
 from brokkr.config import load_settings
 from brokkr.llm.client import OllamaClient
@@ -89,6 +94,67 @@ def _show_manual_instructions(settings, command_id: str, argv: list[str]) -> Non
     )
     console.print(
         f"\nThen check it with: brokkr manual show {short_id}",
+        markup=False,
+        highlight=False,
+    )
+
+
+def _template_constraint_summary(template: ApprovalTemplate) -> str:
+    descriptions: list[str] = []
+    for position, part in enumerate(template.parts):
+        constraint = part.variable
+        if constraint is None:
+            continue
+        if constraint.constraint_type == "path_under_workdir":
+            detail = "path_under_workdir"
+        elif constraint.constraint_type == "enum":
+            assert isinstance(constraint.value, list)
+            detail = f"enum({', '.join(constraint.value)})"
+        else:
+            detail = f"regex({constraint.value})"
+        descriptions.append(f"{position}: {detail}")
+    return "; ".join(descriptions)
+
+
+def _create_template_interactively(approvals: ApprovalStore, argv: list[str]) -> None:
+    console.print("\n[bold]Command positions:[/bold]")
+    for position, value in enumerate(argv):
+        console.print(f"  {position}: {value}", markup=False, highlight=False)
+
+    raw_positions = Prompt.ask("Variable position numbers (comma-separated)")
+    try:
+        positions = sorted({int(value.strip()) for value in raw_positions.split(",")})
+    except ValueError:
+        console.print("[red]template not saved: positions must be comma-separated integers[/red]")
+        return
+
+    variables: dict[int, TemplateConstraint] = {}
+    for position in positions:
+        if position < 0 or position >= len(argv):
+            console.print(f"[red]template not saved: position {position} is outside this argv[/red]")
+            return
+        constraint_type = Prompt.ask(
+            f"Constraint for position {position}",
+            choices=["path_under_workdir", "enum", "regex"],
+        )
+        if constraint_type == "path_under_workdir":
+            constraint = TemplateConstraint(constraint_type)
+        elif constraint_type == "enum":
+            raw_values = Prompt.ask("Allowed values (comma-separated)")
+            allowed_values = [value.strip() for value in raw_values.split(",") if value.strip()]
+            constraint = TemplateConstraint(constraint_type, allowed_values)
+        else:
+            constraint = TemplateConstraint(constraint_type, Prompt.ask("Regular expression"))
+        variables[position] = constraint
+
+    try:
+        template = approvals.create_template(argv, variables)
+    except TemplateValidationError as exc:
+        console.print(f"[red]template not saved:[/red] {exc}")
+        return
+
+    console.print(
+        f"template {template.id} saved: {format_template(template)}",
         markup=False,
         highlight=False,
     )
@@ -193,12 +259,10 @@ def propose(
 ) -> None:
     """Asks the model to propose a command for TASK, shows you its
     reasoning, and lets you run it as-is, edit it, reject it, or handle it
-    manually -- unless
-    that exact command was already remembered from an earlier session, in
-    which case it runs without asking again. Nothing else runs without
-    confirmation, and the proposal, your decision, and (if anything ran)
-    the execution are all recorded under one shared command_id -- see
-    logs/audit.db."""
+    manually -- unless an exact command was remembered earlier or an enabled,
+    human-authored approval template matches. Nothing else runs without
+    confirmation, and the proposal, your decision, and (if anything ran) the
+    execution are all recorded under one shared command_id -- see logs/audit.db."""
     settings = load_settings()
     audit = AuditStore(settings)
     approvals = ApprovalStore(settings)
@@ -220,10 +284,20 @@ def propose(
     console.print(f"[bold]command:[/bold] {shlex.join(proposal.argv)}")
 
     remembered = approvals.find(proposal.argv)
+    matched_template = None
+    if remembered is None and settings.approval_template_matching:
+        matched_template = approvals.find_template(proposal.argv)
+
     if remembered is not None:
         console.print("[cyan](remembered -- running without asking)[/cyan]")
         final_argv = proposal.argv
         decision = "auto_approved"
+    elif matched_template is not None:
+        console.print(
+            f"[cyan](matched template {matched_template.id} -- running without asking)[/cyan]"
+        )
+        final_argv = proposal.argv
+        decision = "template_matched"
     else:
         choice = Prompt.ask(
             "Run this? \\[y]es / \\[e]dit / \\[n]o / \\[m]anual",
@@ -253,8 +327,8 @@ def propose(
             final_argv = proposal.argv
             decision = "manual" if choice == "m" else "approved"
 
-    # Always checked, even for a remembered command -- policy.py can gain
-    # new rules after a command was remembered under an older version.
+    # Always checked, even for remembered or template-matched commands --
+    # policy.py can gain new rules after an approval was stored.
     blocked_reason = check_prohibited(final_argv)
     if blocked_reason is not None:
         audit.record_decision(command_id, "blocked", final_argv, reason=blocked_reason)
@@ -269,6 +343,8 @@ def propose(
 
     if remembered is not None:
         approvals.mark_used(remembered.command_hash)
+    elif matched_template is not None:
+        approvals.mark_template_used(matched_template.id)
 
     # Execution happens before the "remember?" follow-up question,
     # deliberately -- a human dogfooding this surfaced a real bug where
@@ -297,13 +373,23 @@ def propose(
         f"\n[dim]-- {status}, {exec_result.duration_ms:.0f}ms, command_id={command_id}[/dim]"
     )
 
-    if remembered is None:
+    if remembered is None and matched_template is None:
         # Broad catch is deliberate: this question is purely optional
         # follow-up after the real work already happened and was already
         # reported above -- nothing raised here should change this
         # command's outcome or exit code.
         try:
-            if Confirm.ask(
+            if settings.approval_template_matching:
+                remember_choice = Prompt.ask(
+                    r"Remember this command? \[y]es exact / \[n]o / \[t]emplate",
+                    choices=["y", "n", "t"],
+                    default="n",
+                )
+                if remember_choice == "y":
+                    approvals.remember(final_argv, task_description=task)
+                elif remember_choice == "t":
+                    _create_template_interactively(approvals, final_argv)
+            elif Confirm.ask(
                 "Remember this exact command so it skips confirmation next time?",
                 default=False,
             ):
@@ -348,35 +434,58 @@ def manual_show(
 
 @approvals_app.command("list")
 def approvals_list() -> None:
-    """Lists every remembered (auto-approved) exact command."""
+    """Lists exact remembered commands and human-authored templates."""
     settings = load_settings()
     approvals = ApprovalStore(settings)
     remembered = approvals.list_all()
-    if not remembered:
+    templates = approvals.list_templates()
+    if not remembered and not templates:
         console.print("[yellow]no remembered commands[/yellow]")
         return
 
-    table = Table("id", "command", "task", "used", "created")
-    for entry in remembered:
-        table.add_row(
-            str(entry.id),
-            shlex.join(entry.argv),
-            entry.task_description or "",
-            str(entry.use_count),
-            entry.created_at,
-        )
-    console.print(table)
+    if remembered:
+        console.print("[bold]Exact approvals[/bold]")
+        exact_table = Table("id", "command", "task", "used", "created")
+        for entry in remembered:
+            exact_table.add_row(
+                str(entry.id),
+                shlex.join(entry.argv),
+                entry.task_description or "",
+                str(entry.use_count),
+                entry.created_at,
+            )
+        console.print(exact_table)
+
+    if templates:
+        console.print("[bold]Approval templates[/bold]")
+        template_table = Table()
+        template_table.add_column("id", no_wrap=True)
+        template_table.add_column("pattern")
+        template_table.add_column("constraints")
+        template_table.add_column("used", justify="right")
+        for template in templates:
+            template_table.add_row(
+                template.id,
+                format_template(template),
+                _template_constraint_summary(template),
+                str(template.use_count),
+            )
+        console.print(template_table)
 
 
 @approvals_app.command("revoke")
 def approvals_revoke(
-    approval_id: int = typer.Argument(..., help="id shown by `brokkr approvals list`."),
+    approval_id: str = typer.Argument(..., help="id shown by `brokkr approvals list`."),
 ) -> None:
-    """Forgets a remembered command -- it goes back to asking for
-    confirmation every time."""
+    """Revokes an exact remembered command or an approval template."""
     settings = load_settings()
     approvals = ApprovalStore(settings)
-    if approvals.revoke(approval_id):
+    revoked = (
+        approvals.revoke_template(approval_id)
+        if approval_id.startswith("tpl_")
+        else approvals.revoke(approval_id)
+    )
+    if revoked:
         console.print(f"[green]revoked approval {approval_id}[/green]")
     else:
         console.print(f"[yellow]no approval with id {approval_id}[/yellow]")

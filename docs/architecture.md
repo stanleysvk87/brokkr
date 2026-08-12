@@ -14,10 +14,10 @@ task description
       v
   [2] human decision         brokkr/cli.py (propose command)
       |  approve / edit / reject / manual
-      |  -- OR skipped entirely if [3] finds an exact match
+      |  -- OR skipped if [3] finds an exact or enabled template match
       v
   [3] remembered-approval    brokkr/approvals/store.py
-      |  lookup (checked before asking; exact argv match only)
+      |  lookup (exact argv; optional human-authored template constraints)
       v
   [4] policy blocklist       brokkr/permissions/policy.py
       |  always checked, regardless of how the command was approved
@@ -43,9 +43,9 @@ merged into one "is this safe" check:
   sight, and is the only gate with actual judgment. It can also route a
   command to manual handling without granting brokkr any new capability.
 - **The remembered-approval store** exists purely to reduce repeated
-  confirmation fatigue for things a human has already reviewed once —
-  see [docs/security-model.md](security-model.md) for why it's
-  exact-match only.
+  confirmation fatigue for command shapes a human has explicitly reviewed
+  and chosen to remember. Exact matching is always available; constrained
+  templates are an off-by-default opt-in described below.
 - **The policy blocklist** is a static, code-level backstop that runs no
   matter which path a command took to get there — including a remembered
   command from a previous version of the blocklist that didn't yet know
@@ -127,7 +127,7 @@ recreates it from the image, fresh. Nothing about the container's
 internal state silently persists in a way that isn't either (a) still
 there because nobody reset it, or (b) gone because someone did.
 
-## Approval matching: why exact-match only
+## Approval matching: exact by default, explicitly constrained templates by opt-in
 
 `ApprovalStore.find()` hashes the canonical JSON-encoded argv array and
 looks up an exact match — nothing fuzzier. This was a deliberate
@@ -137,14 +137,21 @@ and rejected, because "similar" is a bad axis for a decision that skips
 human review. `rm file.txt` and `rm -rf /` can be close in embedding
 space; their consequences are not close at all.
 
-Generalized template matching (e.g. "same command, any file under
-`/workspace`") is real, useful, and explicitly out of scope for the
-current approval store — see `BROKKR_APPROVAL_TEMPLATE_MATCHING` in
-`.env.example`. If it's ever built, the constraint types must be
-human-authored per rule (a path glob, an enum of allowed values, a
-regex someone actually wrote) — never a pattern the model itself infers
-or proposes, since that would reintroduce exactly the "the model decides
-what's safe to skip" problem exact-match was designed to avoid.
+That remains the default. With `BROKKR_APPROVAL_TEMPLATE_MATCHING=on`, a
+human can instead choose `template` after a reviewed command runs, select
+specific argv positions, and type one constraint for each: a path that must
+stay lexically under `/workspace`, an exact enum of allowed strings, or a
+regular expression using full-match semantics. Every other argv position and
+the argv length remain exact. The originating value must satisfy its own
+constraint before the rule can be saved.
+
+The model never selects a variable position, proposes a constraint, or creates
+a template. Matching is disabled by default, and an existing template is not
+even consulted while the flag is off. A match is recorded as
+`template_matched`, separately from an exact match's `auto_approved`, and the
+final argv still passes through the static policy blocklist before execution.
+This explicit human authorship is the safety property that avoids
+reintroducing "the model decides what's safe to skip" under a new name.
 
 ## Possible eventual convergence: looking up a known-good script instead of generating one
 

@@ -218,11 +218,12 @@ issue.
   `sandbox/docker_sandbox.py`). Outside an explicit shell script, classic
   shell metacharacter attacks (`;`, `&&`, `|`, `>`) simply don't work as
   shell syntax when passed as argv elements in the first place.
-- **The remembered-approval store is exact-match only.** See
-  docs/architecture.md's "Approval matching" section for the full
-  reasoning — in short, "similar" commands can have wildly different
-  consequences, so similarity is never used as a basis for skipping
-  human review.
+- **The remembered-approval store is exact-match by default.** Optional
+  template matching is disabled unless explicitly configured, and templates
+  contain only variable positions and constraints typed by the human after a
+  reviewed command runs. Semantic/model-inferred similarity is never used as
+  a basis for skipping review. Every exact or template match still passes the
+  static blocklist. See docs/architecture.md's "Approval matching" section.
 
 ## Reporting a vulnerability
 

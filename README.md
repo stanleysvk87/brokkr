@@ -22,7 +22,9 @@ decided, and what actually ran.
 
 Stages 0–5 of the build are done: the sandbox mechanism, LLM proposals,
 human confirmation, the policy blocklist, exact-match remembered approvals,
-and explicit human-curated memory all work end-to-end and are covered by tests. See
+optional human-authored approval templates, and explicit human-curated memory
+all work end-to-end and are covered by tests. Template matching remains off by
+default. See
 [CHANGELOG.md](CHANGELOG.md) for exactly what was built and verified at
 each stage, and [docs/architecture.md](docs/architecture.md) for how the
 pieces fit together.
@@ -79,7 +81,8 @@ brokkr propose "list every file in the workspace, including hidden ones"
 brokkr propose "check disk usage of /var/log on the host"
 brokkr manual show a1b2c3d4
 
-# See what's been remembered (auto-approved without asking again).
+# See exact commands and enabled human-authored templates remembered for
+# auto-approval without asking again.
 brokkr approvals list
 
 # Forget a remembered command -- replace 1 with an ID from the list.

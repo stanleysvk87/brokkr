@@ -178,9 +178,8 @@ class AuditStore:
         final_argv: list[str] | None,
         reason: str | None = None,
     ) -> None:
-        """Records what the human (or, from Stage 3, the approval matcher)
-        actually decided: approved as-is, edited, rejected, manual, or
-        blocked by the static policy blocklist."""
+        """Records the human or approval-gate outcome, including distinct
+        exact and template auto-approval decisions."""
         now = datetime.now(timezone.utc).isoformat()
 
         blob = {

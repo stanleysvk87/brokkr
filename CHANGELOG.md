@@ -585,3 +585,29 @@ ordinary multi-step shell commands remain allowed, and malformed shell text is
 skipped without crashing. Regression tests lock in all three shell-wrapped
 command shapes, a dangerous later segment, nested wrapping, safe multi-step
 usage, quoted dangerous-looking text, and unbalanced quotes.
+
+## Human-authored approval templates — 2026-08-13
+
+Implemented the generalized approval matching deliberately deferred since
+Stage 3, behind the existing off-by-default
+`BROKKR_APPROVAL_TEMPLATE_MATCHING` flag. After a reviewed command executes,
+the human can choose `template`, select variable argv positions, and type each
+constraint: a path lexically confined under `/workspace`, an exact enum, or a
+regular expression with full-match semantics. The originating argv must
+satisfy every constraint before the template is saved. No model output selects
+positions, suggests constraints, or creates rules.
+
+Future same-length proposals match only when every literal token is identical
+and every variable token satisfies its stored constraint. Exact matches retain
+priority and the `auto_approved` audit value; template matches are separately
+recorded as `template_matched`, with their own use count and last-used time.
+`brokkr approvals list` labels templates and displays constraints, while the
+existing revoke command accepts template IDs as well as exact approval IDs or
+hashes. The final argv still goes through the unchanged static policy check,
+including after a template match.
+
+Regression coverage exercises path traversal and outside paths, enum equality,
+regex full matching, invalid/origin-mismatched template rejection, argv shape
+matching, exact-match priority, default-off behavior, audit distinction,
+policy blocking before execution, human-only wizard input, listing, usage
+tracking, and revocation.
