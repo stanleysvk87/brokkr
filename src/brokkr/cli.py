@@ -19,11 +19,14 @@ is reviewed fresh every time.
 
 `brokkr approvals ...` lists and revokes remembered commands.
 `brokkr memory ...` explicitly manages human-curated workspace context.
+`brokkr manual ...` reads results the human redirected into that workspace.
 """
 
 from __future__ import annotations
 
 import shlex
+import string
+from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -32,7 +35,7 @@ from rich.table import Table
 
 from brokkr import __version__
 from brokkr.approvals.store import ApprovalStore
-from brokkr.audit.store import AuditStore
+from brokkr.audit.store import AuditStore, ManualDecision
 from brokkr.config import load_settings
 from brokkr.llm.client import OllamaClient
 from brokkr.memory.store import MemoryStore
@@ -43,11 +46,68 @@ app = typer.Typer(help="brokkr -- a local, sandboxed, tool-augmented LLM agent."
 sandbox_app = typer.Typer(help="Direct control of the Docker sandbox (Stage 1, no LLM).")
 approvals_app = typer.Typer(help="List and revoke remembered (auto-approved) commands.")
 memory_app = typer.Typer(help="Manage human-curated context for future proposals.")
+manual_app = typer.Typer(help="Inspect results from commands you ran manually.")
 app.add_typer(sandbox_app, name="sandbox")
 app.add_typer(approvals_app, name="approvals")
 app.add_typer(memory_app, name="memory")
+app.add_typer(manual_app, name="manual")
 
 console = Console()
+_MANUAL_ID_LENGTH = 8
+
+
+def _manual_result_path(settings, command_id: str) -> Path:
+    return settings.sandbox.workdir_host / f"manual-{command_id[:_MANUAL_ID_LENGTH]}.txt"
+
+
+def _display_path(path: Path) -> str:
+    try:
+        return f"~/{path.relative_to(Path.home())}"
+    except ValueError:
+        return str(path)
+
+
+def _shell_path(path: Path) -> str:
+    try:
+        relative = path.relative_to(Path.home())
+        return f"~/{shlex.quote(str(relative))}"
+    except ValueError:
+        return shlex.quote(str(path))
+
+
+def _show_manual_instructions(settings, command_id: str, argv: list[str]) -> None:
+    short_id = command_id[:_MANUAL_ID_LENGTH]
+    result_path = _manual_result_path(settings, command_id)
+    command = shlex.join(argv)
+    console.print("\n[bold]To run this yourself:[/bold]")
+    console.print(f"  {command}", markup=False, highlight=False)
+    console.print(
+        "\nIf you want brokkr to see the result, redirect the output into your workspace, e.g.:"
+    )
+    console.print(
+        f"  {command} > {_shell_path(result_path)}", markup=False, highlight=False
+    )
+    console.print(
+        f"\nThen check it with: brokkr manual show {short_id}",
+        markup=False,
+        highlight=False,
+    )
+
+
+def _resolve_manual_decision(audit: AuditStore, command_id_prefix: str) -> ManualDecision:
+    prefix = command_id_prefix.strip().lower()
+    if not prefix or any(character not in string.hexdigits for character in prefix):
+        console.print("[red]manual id must be a hexadecimal command-id prefix[/red]")
+        raise typer.Exit(code=1)
+
+    matches = audit.find_manual_decisions(prefix)
+    if not matches:
+        console.print(f"[yellow]no manual decision matches {prefix}[/yellow]")
+        raise typer.Exit(code=1)
+    if len(matches) > 1:
+        console.print(f"[yellow]manual id {prefix} is ambiguous; use more characters[/yellow]")
+        raise typer.Exit(code=1)
+    return matches[0]
 
 
 @app.command()
@@ -132,7 +192,8 @@ def propose(
     ),
 ) -> None:
     """Asks the model to propose a command for TASK, shows you its
-    reasoning, and lets you run it as-is, edit it, or reject it -- unless
+    reasoning, and lets you run it as-is, edit it, reject it, or handle it
+    manually -- unless
     that exact command was already remembered from an earlier session, in
     which case it runs without asking again. Nothing else runs without
     confirmation, and the proposal, your decision, and (if anything ran)
@@ -165,7 +226,9 @@ def propose(
         decision = "auto_approved"
     else:
         choice = Prompt.ask(
-            "Run this? [y]es / [e]dit / [n]o", choices=["y", "e", "n"], default="n"
+            "Run this? \\[y]es / \\[e]dit / \\[n]o / \\[m]anual",
+            choices=["y", "e", "n", "m"],
+            default="n",
         )
 
         if choice == "n":
@@ -176,10 +239,19 @@ def propose(
         if choice == "e":
             edited = Prompt.ask("Edit command", default=shlex.join(proposal.argv))
             final_argv = shlex.split(edited)
-            decision = "edited"
+            edited_choice = Prompt.ask(
+                "Use edited command? \\[y]es / \\[n]o / \\[m]anual",
+                choices=["y", "n", "m"],
+                default="n",
+            )
+            if edited_choice == "n":
+                audit.record_decision(command_id, "rejected", None)
+                console.print("[yellow]rejected, nothing ran[/yellow]")
+                raise typer.Exit(code=0)
+            decision = "manual" if edited_choice == "m" else "edited"
         else:
             final_argv = proposal.argv
-            decision = "approved"
+            decision = "manual" if choice == "m" else "approved"
 
     # Always checked, even for a remembered command -- policy.py can gain
     # new rules after a command was remembered under an older version.
@@ -190,6 +262,10 @@ def propose(
         raise typer.Exit(code=1)
 
     audit.record_decision(command_id, decision, final_argv)
+
+    if decision == "manual":
+        _show_manual_instructions(settings, command_id, final_argv)
+        raise typer.Exit(code=0)
 
     if remembered is not None:
         approvals.mark_used(remembered.command_hash)
@@ -236,6 +312,38 @@ def propose(
             pass
 
     raise typer.Exit(code=124 if exec_result.timed_out else exec_result.exit_code)
+
+
+@manual_app.command("show")
+def manual_show(
+    command_id: str = typer.Argument(..., help="Full command id or a unique short prefix."),
+) -> None:
+    """Shows a result file for a command you ran yourself."""
+    settings = load_settings()
+    decision = _resolve_manual_decision(AuditStore(settings), command_id)
+    result_path = _manual_result_path(settings, decision.command_id)
+    shown_path = _display_path(result_path)
+
+    if not result_path.exists():
+        console.print(f"[yellow]no result found at {shown_path} yet[/yellow]")
+        raise typer.Exit(code=1)
+    if result_path.is_symlink() or not result_path.is_file():
+        console.print(f"[red]refusing result path that is not a regular workspace file: {shown_path}[/red]")
+        raise typer.Exit(code=1)
+
+    contents = result_path.read_text(encoding="utf-8", errors="replace")
+    console.print(f"[bold]Manual result for {decision.command_id[:_MANUAL_ID_LENGTH]}:[/bold]")
+    console.print(
+        contents,
+        markup=False,
+        highlight=False,
+        end="" if contents.endswith("\n") else "\n",
+    )
+
+    if Confirm.ask("Save this result as a memory note?", default=False):
+        command = shlex.join(decision.final_argv)
+        note = MemoryStore(settings).add(f"Manual result for {command}:\n{contents}")
+        console.print(f"[green]added memory {note.id}[/green]")
 
 
 @approvals_app.command("list")

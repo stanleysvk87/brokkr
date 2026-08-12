@@ -20,8 +20,8 @@ to one place. A full round trip through Stage 2 writes up to three
 linked rows -- proposals (what the model suggested), decisions (what the
 human actually did about it), commands (what the sandbox actually ran,
 if anything did) -- and a command_id with a decision but no execution row
-is not a bug: it means the human rejected the proposal, or the static
-policy blocklist caught it, before anything ever reached the sandbox.
+is not a bug: it means the human rejected or manually handled the proposal,
+or the static policy blocklist caught it, before anything reached the sandbox.
 
 Failures here are deliberately NOT swallowed, unlike a typical
 best-effort audit logger. "Everything gets recorded so everything can be
@@ -36,7 +36,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -82,6 +82,12 @@ CREATE INDEX IF NOT EXISTS idx_commands_exit_code ON commands (exit_code);
 CREATE INDEX IF NOT EXISTS idx_proposals_created_at ON proposals (created_at);
 CREATE INDEX IF NOT EXISTS idx_decisions_created_at ON decisions (created_at);
 """
+
+
+@dataclass(frozen=True)
+class ManualDecision:
+    command_id: str
+    final_argv: list[str]
 
 
 class AuditStore:
@@ -173,8 +179,8 @@ class AuditStore:
         reason: str | None = None,
     ) -> None:
         """Records what the human (or, from Stage 3, the approval matcher)
-        actually decided: approved as-is, edited, rejected, or blocked by
-        the static policy blocklist."""
+        actually decided: approved as-is, edited, rejected, manual, or
+        blocked by the static policy blocklist."""
         now = datetime.now(timezone.utc).isoformat()
 
         blob = {
@@ -211,6 +217,24 @@ class AuditStore:
                 "reason": reason,
             }
         )
+
+    def find_manual_decisions(self, command_id_prefix: str) -> list[ManualDecision]:
+        """Returns manual decisions whose command id starts with PREFIX."""
+        normalized = command_id_prefix.lower()
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT command_id, final_argv_json
+                FROM decisions
+                WHERE decision = 'manual'
+                ORDER BY created_at ASC
+                """
+            ).fetchall()
+        return [
+            ManualDecision(command_id=row[0], final_argv=json.loads(row[1]))
+            for row in rows
+            if row[1] is not None and row[0].lower().startswith(normalized)
+        ]
 
     def record_execution(
         self, command_id: str, result: SandboxExecutionResult, source: str = "manual"

@@ -73,6 +73,12 @@ brokkr sandbox exec -- ls -la /workspace
 # You'll see its reasoning and the exact command before anything runs.
 brokkr propose "list every file in the workspace, including hidden ones"
 
+# At the confirmation prompt, choose manual for a command you need to run
+# yourself. Follow the printed redirect instructions, then inspect the result
+# with the short command ID brokkr printed.
+brokkr propose "check disk usage of /var/log on the host"
+brokkr manual show a1b2c3d4
+
 # See what's been remembered (auto-approved without asking again).
 brokkr approvals list
 

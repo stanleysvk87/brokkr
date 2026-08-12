@@ -540,3 +540,28 @@ already steering the model away from `ping` to also name `dmesg`
 specifically. Verified live: a repeated "show recent kernel messages" task
 now proposes `ls /var/log` (safe discovery) instead of `dmesg`. Added a
 matching prompt-content test. No sandbox capability changes.
+
+## Manual/advisory mode for host-privileged work -- 2026-08-12
+
+Added a fourth `brokkr propose` decision, `manual`, for commands the human
+needs to run outside the deliberately unprivileged sandbox. The normal static
+policy check still runs against the final proposed or edited argv first. A
+manual decision records that exact argv, prints a shell-quoted command and a
+predictable `manual-<short-command-id>.txt` redirect path in the existing
+workspace, then exits without constructing or calling `DockerSandbox` and
+without creating a `commands` row.
+
+Added `brokkr manual show <command-id-or-prefix>`. It resolves only audited
+manual decisions, rejects missing or ambiguous prefixes, reads the predictable
+regular result file from the configured workspace, and can save the displayed
+contents as an explicit memory note for later proposals. Result symlinks are
+rejected so this convenience command cannot become an arbitrary host-file
+reader. There is no automatic ingestion, new mount, arbitrary path argument,
+privilege relay, or host execution path.
+
+Regression coverage locks in direct and edited manual choices, policy blocking
+before instructions, zero sandbox executions, short-prefix result lookup,
+missing results, memory-note creation, and symlink rejection. Live verification
+followed the printed redirect command, used both full and short IDs, confirmed
+the saved result entered later proposal context, and confirmed neither manual
+handling nor manual result display created sandbox activity.

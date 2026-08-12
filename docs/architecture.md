@@ -2,9 +2,8 @@
 
 ## The pipeline
 
-Every command that runs through `brokkr propose` goes through the same
-four stages, in order, and every stage is independently skippable in a
-way that's visible in the audit trail:
+Every proposal handled through `brokkr propose` goes through the same four
+gates, in order, and every gate is independently visible in the audit trail:
 
 ```
 task description
@@ -14,7 +13,7 @@ task description
       |  (structured output: {reasoning, argv})
       v
   [2] human decision         brokkr/cli.py (propose command)
-      |  approve / edit / reject
+      |  approve / edit / reject / manual
       |  -- OR skipped entirely if [3] finds an exact match
       v
   [3] remembered-approval    brokkr/approvals/store.py
@@ -22,13 +21,16 @@ task description
       v
   [4] policy blocklist       brokkr/permissions/policy.py
       |  always checked, regardless of how the command was approved
+      |
+      +-- manual ----------> copyable instructions (no execution)
+      |
       v
-  [5] sandbox execution      brokkr/sandbox/docker_sandbox.py
+  [5] approved execution     brokkr/sandbox/docker_sandbox.py
 ```
 
-Steps [1]–[4] never touch the real filesystem or network — the actual
-consequential action is entirely inside step [5], and everything before
-it exists to decide whether that step should happen at all.
+Steps [1]–[4] never execute the proposed command. An approved command reaches
+the sandbox in step [5]; a manual decision stops after policy and only prints
+instructions for the human, who decides whether and where to run it.
 
 ## Why four separate gates instead of one
 
@@ -38,7 +40,8 @@ merged into one "is this safe" check:
 - **The LLM proposal** can be wrong, but it can't do anything by itself —
   it only ever produces a JSON object.
 - **Human review** catches the cases a human would obviously reject on
-  sight, and is the only gate with actual judgment.
+  sight, and is the only gate with actual judgment. It can also route a
+  command to manual handling without granting brokkr any new capability.
 - **The remembered-approval store** exists purely to reduce repeated
   confirmation fatigue for things a human has already reviewed once —
   see [docs/security-model.md](security-model.md) for why it's
@@ -60,12 +63,13 @@ model is even called:
 - `proposals` — what the model was asked, and what it proposed (or
   failed to produce).
 - `decisions` — what actually happened to the proposal: approved,
-  edited, rejected, auto-approved from memory, or blocked by policy.
+  edited, rejected, manual, auto-approved from memory, or blocked by policy.
 - `commands` — what the sandbox actually ran, if anything did.
 
 A `command_id` with a `decisions` row but no matching `commands` row is
 expected, not a corrupted record — it means the pipeline stopped before
-step [5], and exactly where it stopped is recorded in `decisions.decision`.
+step [5]. This includes rejected and blocked proposals as well as a `manual`
+decision, where the human was shown what to run but brokkr executed nothing.
 
 Every one of those three tables also gets a full JSON blob written to
 `logs/blobs/<command_id>/<event>.json` (the complete model response, the
@@ -77,6 +81,24 @@ this three-way split instead of a single log format.
 `brokkr sandbox exec` (the direct, no-LLM entry point) only ever writes
 a `commands` row — there's no proposal or decision to record, since a
 human typed the exact command themselves.
+
+## Manual/advisory results
+
+Manual mode is for commands that need privileges or host access the sandbox
+deliberately does not have. After the normal proposal, human-review, and policy
+gates, brokkr records a `manual` decision and prints a copyable command plus a
+predictable result path in the existing workspace:
+
+```
+~/brokkr-workspace/manual-<short-command-id>.txt
+```
+
+The human runs and redirects the command themselves. `brokkr manual show <id>`
+resolves a unique full or short command-id prefix, reads that one result file,
+and can save the displayed result as an explicit memory note. There is no
+watcher, automatic ingestion, arbitrary-path reader, host execution, sudo
+relay, or additional mount: this flow reuses only the already-configured
+workspace directory and happens when the human explicitly invokes `show`.
 
 ## The sandbox container's lifecycle
 
