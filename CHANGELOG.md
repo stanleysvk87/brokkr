@@ -456,3 +456,29 @@ with these verified cases and corrected an old `policy.py` docstring that
 incorrectly claimed blocklisted proposals were never shown for approval. The
 actual pipeline has always checked policy against final approved, edited, or
 remembered argv immediately before sandbox execution.
+
+## Container-escape red-team pass — 2026-08-12
+
+Round 9 of security testing (planned as a Codex round, but that
+platform's own safety classifier declined the task before starting --
+"extra caution with cybersecurity requests" -- so this round was run
+directly instead) was a deliberate attempt to escape the Docker sandbox
+itself, using the disposable VM specifically so it could be pushed
+harder than the primary machine: `mount` (needs `CAP_SYS_ADMIN`), raw
+socket creation (needs `CAP_NET_RAW`), writing to `/proc/sys/kernel/
+sysrq`, reading `/proc/1/root/` for host filesystem leakage, direct and
+`mknod`-created access to the VM's own raw disk device, and a
+thread-based (not process-fork) PID-exhaustion variant.
+
+Every attempt failed cleanly -- permission errors or read-only-filesystem
+errors, never a traceback, never success. `/proc/1/root/` resolved to the
+container's own overlay filesystem, not the host's. `/dev` contained only
+Docker's standard minimal device set, no raw block device. The thread
+bomb stopped at the identical `pids.current=256` the process-fork variant
+already hit, confirming the cgroup limit isn't technique-specific.
+`ps aux` inside the container never showed the host's own ~180 processes.
+Passive host-side network monitoring (kernel/ufw logs) for the VM's
+subnet, running for the whole pass, logged nothing unexpected. No code
+changes -- `docs/security-model.md`'s "What was actually tested" section
+now records this pass. VM left clean (`sandbox reset`, runtime state
+cleared).

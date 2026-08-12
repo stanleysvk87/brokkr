@@ -97,6 +97,24 @@ development (see CHANGELOG.md's Stage 1 entry for the full detail):
   rejected cleanly by the deterministic proposal validator before approval or
   execution. A requested bare pipe was instead repaired by the model into an
   explicit `bash -c` command and still required human review.
+- **A deliberate container-escape attempt pass**, run against a disposable
+  VM specifically so it could be aggressive: `mount` inside the container
+  failed ("must be superuser"); creating a raw socket (`CAP_NET_RAW`) raised
+  `PermissionError`; writing to `/proc/sys/kernel/sysrq` failed with
+  "Read-only file system"; `/proc/1/root/` resolved to the container's own
+  overlay filesystem (confirmed via the `.dockerenv` marker), not the host's;
+  `/dev` contained only the standard minimal Docker device set (`null`,
+  `zero`, `random`, `urandom`, `tty`, `full`) with no raw host block device
+  present, and both a direct read of the VM's own disk device and `mknod`
+  attempting to create one failed cleanly. A thread-based PID-exhaustion
+  attempt (2,000 threads, not the process-fork shape already covered above)
+  stopped at the same `pids.current=256` cgroup limit, confirming the limit
+  holds regardless of thread vs. process technique; the container returned
+  to a clean two-process state afterward with no leftover threads. `ps aux`
+  inside the container showed only the container's own processes (PID
+  namespace isolation), never the host's ~180 real processes. Host-side
+  network monitoring (kernel/ufw logs) during the entire pass recorded
+  nothing unexpected. No attempt reached outside the container.
 
 If you find a way past any of these four properties, that's a real
 security bug — see "Reporting a vulnerability" below, not a public
