@@ -392,3 +392,16 @@ orderings deterministic: either exec records use before reset deletes the
 marker, or reset removes the container first and the exec skips its stale
 write. Repeating the live race left neither container nor marker, and the
 next exec created a clean sandbox.
+
+## Fresh-clone onboarding verification — 2026-08-12
+
+Followed only the README prerequisites, install steps, and Quickstart from a
+fresh clone. Installation succeeded, but every Quickstart command failed with
+`brokkr: command not found` because the documented install flow created a
+virtual environment without activating it. Added the missing activation step
+and repeated the sandbox command and interactive proposal successfully; the
+proposal was inspected and rejected, so no model-proposed command ran.
+
+Updated the stale Stage 0–3 status to Stage 0–5, added examples for the existing
+human-curated memory commands, made the revoke/forget ID examples valid shell,
+and added the missing `BROKKR_LOG_LEVEL=INFO` default to `.env.example`.

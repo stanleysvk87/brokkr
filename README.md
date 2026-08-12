@@ -20,9 +20,9 @@ decided, and what actually ran.
 
 ## Status
 
-Stages 0–3 of the build are done: the sandbox mechanism, LLM proposals,
-human confirmation, the policy blocklist, and exact-match remembered
-approvals all work end-to-end and are covered by tests. See
+Stages 0–5 of the build are done: the sandbox mechanism, LLM proposals,
+human confirmation, the policy blocklist, exact-match remembered approvals,
+and explicit human-curated memory all work end-to-end and are covered by tests. See
 [CHANGELOG.md](CHANGELOG.md) for exactly what was built and verified at
 each stage, and [docs/architecture.md](docs/architecture.md) for how the
 pieces fit together.
@@ -58,6 +58,7 @@ cd brokkr
 python3 -m venv .venv
 .venv/bin/pip install -e .
 cp .env.example .env   # adjust if your Ollama URL/model/paths differ
+source .venv/bin/activate
 ```
 
 ## Quickstart
@@ -75,8 +76,15 @@ brokkr propose "list every file in the workspace, including hidden ones"
 # See what's been remembered (auto-approved without asking again).
 brokkr approvals list
 
-# Forget a remembered command -- it goes back to asking every time.
-brokkr approvals revoke <id>
+# Forget a remembered command -- replace 1 with an ID from the list.
+brokkr approvals revoke 1
+
+# Add explicit workspace context for future proposals, then inspect it.
+brokkr memory add "This workspace uses Python 3.12"
+brokkr memory list
+
+# Remove a note -- replace 1 with an ID from the memory list.
+brokkr memory forget 1
 
 # Wipe the sandbox container -- next command gets a fresh rootfs.
 brokkr sandbox reset
