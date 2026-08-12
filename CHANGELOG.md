@@ -251,3 +251,49 @@ list was empty again. The full test suite and Ruff checks passed, including
 new coverage for add/list/forget, recency ordering and limits, empty
 state, context-bearing LLM payloads, and byte-identical message structure
 when notes are empty or omitted.
+
+## Security verification round: resource limits and symlink escape — 2026-08-12
+
+`docs/security-model.md`'s "What was actually tested" section claimed
+memory and PID cgroup limits were enforced, and implied the mount
+boundary held against a symlink escape -- but only `rm -rf /`, a timeout
+kill, and a blocked network call had actually been exercised live (all
+back in Stage 1). This round closed that gap: four properties that had
+only ever been designed and asserted, not run.
+
+All four held:
+
+- **Memory limit.** Docker's default 2 GiB swap allowance means the real
+  ceiling on top of `BROKKR_SANDBOX_MEMORY_LIMIT=2g` is 4 GiB combined,
+  not 2 GiB alone -- a 3 GiB touched allocation completed fine through
+  swap. A 5 GiB allocation was OOM-killed (exit 137, recorded in the
+  cgroup's `memory.events`), and the container itself stayed up and
+  usable afterward.
+- **PID limit.** A legitimate-looking runaway spawn loop (not matching
+  `permissions/policy.py`'s fork-bomb regex) attempting 400 child
+  processes stopped at exactly `pids.current=256`, matching
+  `BROKKR_SANDBOX_PIDS_LIMIT`.
+- **Symlink escape.** A symlink from `/workspace` to `/etc` resolved only
+  inside the container's own filesystem namespace (a different hash from
+  the real host `/etc`); a write through it failed permission-denied and
+  created nothing on either side.
+- **Non-root `apt-get install`.** Failed immediately and cleanly (dpkg
+  frontend lock, explicit permission error) -- no hang, no half-broken
+  state.
+
+No code bugs -- `docs/security-model.md` (commit `2f71539`) was updated
+to record these as now-verified. This closes the gap between what the
+security model claimed and what had actually been exercised.
+
+## Sandbox tooling: added `jq` — 2026-08-12
+
+Manually dogfooding a JSON-extraction task ("get the version field from
+data.json") through `brokkr propose` failed with a clean but avoidable
+`exit 127`: the model reached for `jq` -- the standard, idiomatic tool
+for this in any real shell environment -- and it wasn't in the sandbox
+image. Added it to `sandbox/Dockerfile` next to the other minimal,
+deliberately-chosen tools (same reasoning as `python-is-python3`: not
+"install everything", just closing a real gap a real task hit).
+Rebuilt the image and re-ran the same task -- the model correctly
+proposed `jq -r .version /workspace/data.json` once the tool existed to
+support it.

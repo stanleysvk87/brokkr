@@ -20,6 +20,7 @@ RUN apt-get update \
         python3-pip \
         python-is-python3 \
         procps \
+        jq \
     && rm -rf /var/lib/apt/lists/*
 
 # Debian's system Python refuses `pip install` outside a venv by default
