@@ -32,6 +32,7 @@ brokkr-workspace/
 
 # Personal orientation notes -- not part of the product, never committed
 STATUS.md
+CODEX_*.md
 
 # Tooling caches
 .pytest_cache/
