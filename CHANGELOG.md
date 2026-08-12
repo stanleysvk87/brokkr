@@ -137,3 +137,24 @@ Stage 4 (public-release documentation: full README, security-model
 doc, SECURITY.md, CONTRIBUTING.md) is next -- Stages 0-3 cover
 everything the plan called the core, riskiest mechanism; what's left
 is making the project legible to someone who didn't build it.
+
+## Stage 4: public-release documentation — 2026-08-12
+
+No code changes. Full README (prerequisites, install, quickstart,
+config, what-this-is-not), `docs/architecture.md` (the propose →
+decide → approve → policy → execute pipeline, the audit trail's three
+linked tables, the sandbox container's lifecycle, and why approval
+matching is exact-match only), `docs/security-model.md` (the four
+properties of the sandbox that make it the actual boundary, what was
+manually verified during Stage 1 and why that's the evidence rather
+than the design alone, and an explicit list of what this project does
+and does not defend against), `SECURITY.md` (private vulnerability
+reporting, explicit in/out-of-scope list), and `CONTRIBUTING.md` (dev
+setup, required checks, the conventions the codebase actually
+enforces, and a note on designs that were deliberately rejected rather
+than simply not-yet-built, so a contributor doesn't reintroduce them).
+
+This closes out the plan in
+`~/.claude/plans/partitioned-fluttering-sonnet.md` -- Stages 0 through
+4 are all done. What's left before a public GitHub repo is a human
+read-through of the whole thing, not more building.
