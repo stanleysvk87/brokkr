@@ -65,6 +65,10 @@ class Settings(BaseModel):
     def memory_db_path(self) -> Path:
         return self.data_dir / "memory.db"
 
+    @property
+    def sandbox_last_used_path(self) -> Path:
+        return self.data_dir / "sandbox_last_used"
+
 
 def _resolve_dir(value: str) -> Path:
     path = Path(value).expanduser()

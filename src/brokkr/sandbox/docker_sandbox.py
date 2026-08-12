@@ -6,6 +6,16 @@ works across calls. The container's rootfs is torn down and recreated --
 never reused in place -- on reset(), so state never silently accumulates
 across sessions in a way nobody can see or explain.
 
+It also resets itself automatically after BROKKR_SANDBOX_IDLE_RESET_MINUTES
+of no activity (0 or negative disables this), tracked via a small
+timestamp file at Settings.sandbox_last_used_path rather than any Docker
+metadata -- container labels aren't meant to be rewritten on every use,
+and inspecting "when was this container created" answers a different
+question than "when was it last actually used". This exists for the same
+reason reset() exists at all: a sandbox someone walked away from hours
+ago and forgot about is exactly the kind of silently-accumulated state
+this module is designed never to have.
+
 Two independent enforcement layers, deliberately not one:
   1. The Docker-level boundary (this module): a single scoped bind mount,
      --network none by default, resource limits, dropped capabilities,
@@ -38,6 +48,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 import docker
@@ -116,11 +127,45 @@ class DockerSandbox:
         trigger a build+run just to check."""
         return self._get_container()
 
+    def _read_last_used(self) -> datetime | None:
+        try:
+            raw = self._settings.sandbox_last_used_path.read_text().strip()
+            return datetime.fromisoformat(raw)
+        except (FileNotFoundError, ValueError):
+            return None
+
+    def _touch_last_used(self) -> None:
+        path = self._settings.sandbox_last_used_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(datetime.now(timezone.utc).isoformat())
+
+    def _is_idle_expired(self) -> bool:
+        idle_minutes = self._settings.sandbox.idle_reset_minutes
+        if idle_minutes <= 0:
+            return False
+        last_used = self._read_last_used()
+        if last_used is None:
+            # No recorded use yet (e.g. the container predates this
+            # feature, or the marker file was cleared) -- don't reset
+            # something that's never actually been used idly.
+            return False
+        elapsed_minutes = (datetime.now(timezone.utc) - last_used).total_seconds() / 60
+        return elapsed_minutes >= idle_minutes
+
     def ensure_running(self) -> Container:
         """Returns the long-lived sandbox container, starting or creating
-        it if necessary. Does NOT reset an existing container's rootfs --
-        call reset() explicitly for that."""
+        it if necessary. Auto-resets it first if it's been idle past
+        BROKKR_SANDBOX_IDLE_RESET_MINUTES; otherwise does NOT reset an
+        existing container's rootfs -- call reset() explicitly for that."""
         container = self._get_container()
+        if container is not None and self._is_idle_expired():
+            logger.info(
+                "Sandbox idle past %.0f minutes, resetting before reuse",
+                self._settings.sandbox.idle_reset_minutes,
+            )
+            self.reset()
+            container = None
+
         if container is not None:
             container.reload()
             if container.status != "running":
@@ -129,6 +174,7 @@ class DockerSandbox:
 
         self.build_image()
         sandbox = self._settings.sandbox
+        self._touch_last_used()
         return self._client.containers.run(
             sandbox.image,
             name=sandbox.container_name,
@@ -169,6 +215,7 @@ class DockerSandbox:
         """Stops and removes the sandbox container so the next
         ensure_running() call creates it fresh -- new rootfs, nothing
         carried over from before."""
+        self._settings.sandbox_last_used_path.unlink(missing_ok=True)
         container = self._get_container()
         if container is None:
             return
@@ -207,6 +254,7 @@ class DockerSandbox:
         except APIError as exc:
             raise SandboxError(f"docker exec failed: {exc}") from exc
         duration_ms = (time.monotonic() - started) * 1000
+        self._touch_last_used()
 
         stdout, stdout_truncated = _truncate(stdout_bytes or b"", _MAX_STDOUT_BYTES)
         stderr, stderr_truncated = _truncate(stderr_bytes or b"", _MAX_STDERR_BYTES)

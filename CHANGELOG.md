@@ -326,3 +326,32 @@ structured-output support, so the failure path was checked with an
 unavailable model override instead; it returned a clean proposal error
 and exit 1, with the requested model and HTTP 404 stored in the audit
 row rather than raising a traceback.
+
+## Idle-reset actually enforced — 2026-08-12
+
+`BROKKR_SANDBOX_IDLE_RESET_MINUTES` had existed in `.env.example` and
+`config.py` since Stage 1 but nothing ever checked it -- the sandbox only
+ever reset when a human explicitly ran `brokkr sandbox reset`. A
+container someone walked away from and forgot about would sit there
+indefinitely, exactly the kind of silently-accumulated state
+`sandbox/docker_sandbox.py`'s own module docstring says this project
+doesn't want.
+
+Fixed by tracking a small timestamp file at the new
+`Settings.sandbox_last_used_path` (`data/sandbox_last_used`), touched at
+the end of every successful `exec()` call and checked at the start of
+`ensure_running()`: if the container has gone unused past the configured
+window, it's reset automatically before being reused. `0` or a negative
+value disables auto-reset entirely (manual `sandbox reset` still works).
+`reset()` also now clears the marker file itself, so a manually-reset
+sandbox doesn't carry a stale timestamp forward.
+
+Added `tests/test_sandbox_idle_reset.py` covering the marker logic in
+isolation (never-used, within-window, past-window, disabled, and a
+corrupt-file case) -- constructing `DockerSandbox` doesn't require a
+live Docker connection, so these didn't need one. Manually verified live
+against the real daemon too: with the window set to ~1 second, a second
+`sandbox exec` call after a short sleep produced a genuinely different
+container id; with the window left at its 60-minute default, two calls
+a few seconds apart kept the same container id, confirming normal use
+isn't disrupted.
