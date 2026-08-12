@@ -15,7 +15,20 @@ The Pydantic schema below is a second, independent check on top of
 Ollama's own schema-constrained decoding -- constrained decoding
 guarantees syntactically valid JSON shaped like the schema, not that the
 values inside it are sane (an empty argv list is valid JSON matching the
-schema and useless as a command).
+schema and useless as a command). It also catches a real failure mode
+found by dogfooding, not just a hypothetical one: asked to "count files
+in the workspace", qwen2.5-coder:7b proposed `["find", "/workspace",
+"-maxdepth", "1", "-type", "f", "|", "wc", "-l"]` -- a bare `|` as its
+own argv element, despite the system prompt explicitly saying not to do
+that. Since brokkr never uses a shell to run argv (see
+sandbox/docker_sandbox.py), that `|` doesn't pipe anything -- it's just
+handed to `find` as a literal argument, which fails with a confusing
+"paths must precede expression" error instead of doing what was asked.
+Prompt instructions alone don't reliably stop a small local model from
+doing this occasionally; catching it here, deterministically, is the
+same lesson this project has already applied elsewhere (the static
+policy blocklist exists for the same reason: code-level checks catch
+what a prompt only asks nicely for).
 """
 
 from __future__ import annotations
@@ -51,6 +64,14 @@ _SYSTEM_PROMPT = (
 )
 
 
+# Standalone argv tokens that only mean anything to a shell. A quoted
+# string legitimately *containing* one of these (e.g. an argument whose
+# value happens to be "a|b") is fine and untouched -- this only rejects
+# an element that IS one of these, verbatim, which is never a valid
+# literal argument to any real command.
+_BARE_SHELL_OPERATOR_TOKENS = frozenset({"|", "||", "&&", ";", ">", ">>", "<", "<<", "&"})
+
+
 class _ProposalSchema(BaseModel):
     reasoning: str
     argv: list[str]
@@ -60,6 +81,19 @@ class _ProposalSchema(BaseModel):
     def _argv_not_empty(cls, value: list[str]) -> list[str]:
         if not value:
             raise ValueError("argv must not be empty")
+        return value
+
+    @field_validator("argv")
+    @classmethod
+    def _no_bare_shell_operators(cls, value: list[str]) -> list[str]:
+        bad_tokens = [token for token in value if token in _BARE_SHELL_OPERATOR_TOKENS]
+        if bad_tokens:
+            raise ValueError(
+                f"argv contains a bare shell operator token {bad_tokens!r} -- "
+                "shell operators only work inside a shell, and brokkr never runs "
+                'one implicitly; the proposal should have used ["bash", "-c", '
+                '"<script>"] instead of putting the operator directly in argv'
+            )
         return value
 
 

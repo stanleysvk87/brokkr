@@ -198,3 +198,31 @@ case not aborting, `git config --global` succeeding, and `pip install`
 succeeding with `BROKKR_SANDBOX_NETWORK=bridge` (still correctly
 failing on DNS resolution with the default `--network none`, which is
 the isolation working as intended, not a bug).
+
+## More dogfooding: bare shell operators in proposals — 2026-08-12
+
+A second, more thorough testing round (timeout override through the
+full propose flow, output truncation at scale, the policy blocklist
+live-tested against `dd`/`mkfs`/fork-bomb proposals, teaching and
+reusing several remembered commands, Slovak-language tasks and
+diacritics, an externally-`docker stop`-ed container recovering
+correctly) found one real bug: asked to "count how many files are in
+the workspace", `qwen2.5-coder:7b` proposed `["find", "/workspace",
+"-maxdepth", "1", "-type", "f", "|", "wc", "-l"]` -- a bare `|` as its
+own argv element, despite the system prompt explicitly saying not to do
+that. Since brokkr never runs argv through a shell, that `|` doesn't
+pipe anything; it's handed to `find` as a literal argument, which fails
+with a confusing "paths must precede expression" error instead of doing
+what was asked.
+
+Fixed with a second Pydantic validator on the proposal schema
+(`llm/client.py`) that rejects any argv element that IS one of `| || &&
+; > >> < << &`, verbatim, with a clear error explaining the command
+should have been wrapped in `["bash", "-c", "<script>"]` instead. This
+is the same lesson the static policy blocklist already embodies:
+prompt instructions alone don't reliably stop a small local model from
+doing this occasionally, so it needs a deterministic, code-level check,
+not just a politely-worded system prompt. Reproduced live against the
+real Ollama server afterward (a different but structurally identical
+proposal for the same task) and confirmed it's now caught with a clear
+message instead of silently executing something broken.

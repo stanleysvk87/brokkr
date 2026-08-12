@@ -66,6 +66,24 @@ def test_propose_errors_on_empty_argv(monkeypatch, settings):
     assert result.error is not None
 
 
+def test_propose_errors_on_bare_shell_operator_token(monkeypatch, settings):
+    # Reproduces a real qwen2.5-coder:7b response found by dogfooding:
+    # asked to count files, it proposed find ... | wc -l as flat argv
+    # instead of wrapping it in ["bash", "-c", "..."].
+    invalid_content = json.dumps(
+        {
+            "reasoning": "because",
+            "argv": ["find", "/workspace", "-type", "f", "|", "wc", "-l"],
+        }
+    )
+    monkeypatch.setattr(httpx, "post", lambda *a, **kw: _fake_response(invalid_content))
+
+    result = OllamaClient(settings).propose("count files")
+
+    assert result.proposal is None
+    assert "bare shell operator" in result.error
+
+
 def test_propose_errors_on_connection_failure(monkeypatch, settings):
     def _raise(*args, **kwargs):
         raise httpx.ConnectError("connection refused")
