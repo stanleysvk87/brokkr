@@ -64,3 +64,42 @@ complete records across `logs/audit.db`, `logs/blobs/`, and
 Stage 2 (an LLM proposes a command via structured output, a human
 confirms or edits it, it runs through this same sandbox mechanism) is
 next.
+
+## Stage 2: LLM proposes, human confirms — 2026-08-12
+
+`brokkr propose "<task description>"`. Still no approval memory --
+every proposal is reviewed fresh (that's Stage 3).
+
+Added: `llm/client.py` (`OllamaClient.propose()` -- uses Ollama's
+structured-output feature, a JSON Schema passed as the request's
+`format` field, so the model's response is constrained to valid JSON
+matching a `{reasoning, argv}` shape at decode time, then independently
+re-validated with Pydantic since constrained decoding guarantees
+syntactically valid JSON, not sane values -- an empty `argv` is valid
+JSON and useless as a command). Confirmed working end-to-end locally
+against Ollama 0.32 with `qwen2.5-coder:7b`.
+
+`audit/store.py` gained two more linked tables, `proposals` and
+`decisions`, alongside Stage 1's `commands` -- all three share one
+command_id, minted once via `AuditStore.new_command_id()` before the
+model is even called. A command_id with a decision row but no commands
+row is expected, not a bug: it means the human rejected the proposal,
+or the policy blocklist caught it, before anything reached the sandbox.
+
+`permissions/policy.py`'s blocklist is now actually wired in -- at the
+`brokkr propose` layer, checked against whatever the human's final
+decision produced (approved as-is or edited), right before the sandbox
+call. `brokkr sandbox exec` (Stage 1) still has no blocklist gate of its
+own by design; that's the raw mechanism Stage 1's own verification
+depends on being able to reach the sandbox unfiltered.
+
+Manually verified: a proposal that's approved as-is and actually runs;
+one that's rejected outright (nothing runs, decision row still
+recorded); and one that's edited by the human into `rm -rf /` --
+confirmed the blocklist rejects it even after human approval of the
+edited form, and confirmed no `commands` row was created for it.
+Inspected `logs/audit.db` afterward: exactly the expected linked rows
+across all three tables for each case.
+
+Stage 3 (an `approved_commands` table + exact-match lookup, so a
+previously-approved command doesn't need re-confirming) is next.

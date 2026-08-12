@@ -14,9 +14,14 @@ append-only JSONL log would be unpleasant to query. Instead:
                        `tail -f logs/audit.jsonl` gives a live feed
                        without opening the database.
 
-Every event a command produces gets the same command_id, so all three
-places (and later, the Stage 2/3 proposal + approval-decision events)
-join back to one place.
+Every event a command produces shares one command_id, minted once by
+new_command_id() before anything happens, so all three places join back
+to one place. A full round trip through Stage 2 writes up to three
+linked rows -- proposals (what the model suggested), decisions (what the
+human actually did about it), commands (what the sandbox actually ran,
+if anything did) -- and a command_id with a decision but no execution row
+is not a bug: it means the human rejected the proposal, or the static
+policy blocklist caught it, before anything ever reached the sandbox.
 
 Failures here are deliberately NOT swallowed, unlike a typical
 best-effort audit logger. "Everything gets recorded so everything can be
@@ -36,9 +41,29 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from brokkr.config import Settings
+from brokkr.llm.client import ProposalResult
 from brokkr.sandbox.docker_sandbox import SandboxExecutionResult
 
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS proposals (
+    command_id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    task_description TEXT NOT NULL,
+    model TEXT NOT NULL,
+    reasoning TEXT,
+    proposed_argv_json TEXT,
+    latency_ms REAL,
+    error TEXT
+);
+
+CREATE TABLE IF NOT EXISTS decisions (
+    command_id TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    decision TEXT NOT NULL,
+    final_argv_json TEXT,
+    reason TEXT
+);
+
 CREATE TABLE IF NOT EXISTS commands (
     command_id TEXT PRIMARY KEY,
     created_at TEXT NOT NULL,
@@ -54,6 +79,8 @@ CREATE TABLE IF NOT EXISTS commands (
 
 CREATE INDEX IF NOT EXISTS idx_commands_created_at ON commands (created_at);
 CREATE INDEX IF NOT EXISTS idx_commands_exit_code ON commands (exit_code);
+CREATE INDEX IF NOT EXISTS idx_proposals_created_at ON proposals (created_at);
+CREATE INDEX IF NOT EXISTS idx_decisions_created_at ON decisions (created_at);
 """
 
 
@@ -66,6 +93,10 @@ class AuditStore:
         self._blobs_dir.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+
+    @staticmethod
+    def new_command_id() -> str:
+        return uuid.uuid4().hex
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path)
@@ -84,12 +115,107 @@ class AuditStore:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
             handle.flush()
 
+    def record_proposal(self, command_id: str, result: ProposalResult) -> None:
+        """Records what the model was asked and what it proposed (or
+        failed to produce)."""
+        now = datetime.now(timezone.utc).isoformat()
+        proposal = result.proposal
+
+        blob = {
+            "command_id": command_id,
+            "created_at": now,
+            "task_description": result.task_description,
+            "model": result.model,
+            "raw_content": result.raw_content,
+            "latency_ms": result.latency_ms,
+            "error": result.error,
+            "reasoning": proposal.reasoning if proposal else None,
+            "argv": proposal.argv if proposal else None,
+        }
+        self._write_blob(command_id, "proposal", blob)
+
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO proposals (
+                    command_id, created_at, task_description, model,
+                    reasoning, proposed_argv_json, latency_ms, error
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    command_id,
+                    now,
+                    result.task_description,
+                    result.model,
+                    proposal.reasoning if proposal else None,
+                    json.dumps(proposal.argv, ensure_ascii=False) if proposal else None,
+                    result.latency_ms,
+                    result.error,
+                ),
+            )
+
+        self._append_jsonl(
+            {
+                "timestamp": now,
+                "command_id": command_id,
+                "event": "proposal",
+                "task_description": result.task_description,
+                "argv": proposal.argv if proposal else None,
+                "error": result.error,
+            }
+        )
+
+    def record_decision(
+        self,
+        command_id: str,
+        decision: str,
+        final_argv: list[str] | None,
+        reason: str | None = None,
+    ) -> None:
+        """Records what the human (or, from Stage 3, the approval matcher)
+        actually decided: approved as-is, edited, rejected, or blocked by
+        the static policy blocklist."""
+        now = datetime.now(timezone.utc).isoformat()
+
+        blob = {
+            "command_id": command_id,
+            "created_at": now,
+            "decision": decision,
+            "final_argv": final_argv,
+            "reason": reason,
+        }
+        self._write_blob(command_id, "decision", blob)
+
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO decisions (command_id, created_at, decision, final_argv_json, reason)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    command_id,
+                    now,
+                    decision,
+                    json.dumps(final_argv, ensure_ascii=False) if final_argv else None,
+                    reason,
+                ),
+            )
+
+        self._append_jsonl(
+            {
+                "timestamp": now,
+                "command_id": command_id,
+                "event": "decision",
+                "decision": decision,
+                "final_argv": final_argv,
+                "reason": reason,
+            }
+        )
+
     def record_execution(
-        self, result: SandboxExecutionResult, source: str = "manual"
-    ) -> str:
-        """Records one sandbox execution across all three stores. Returns
-        the generated command_id."""
-        command_id = uuid.uuid4().hex
+        self, command_id: str, result: SandboxExecutionResult, source: str = "manual"
+    ) -> None:
+        """Records one sandbox execution across all three stores."""
         now = datetime.now(timezone.utc).isoformat()
 
         blob = {"command_id": command_id, "created_at": now, "source": source, **asdict(result)}
@@ -122,6 +248,7 @@ class AuditStore:
             {
                 "timestamp": now,
                 "command_id": command_id,
+                "event": "execution",
                 "source": source,
                 "command": result.command,
                 "exit_code": result.exit_code,
@@ -129,4 +256,3 @@ class AuditStore:
                 "duration_ms": round(result.duration_ms, 1),
             }
         )
-        return command_id

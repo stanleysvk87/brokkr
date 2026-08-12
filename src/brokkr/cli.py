@@ -1,23 +1,35 @@
 """brokkr CLI entry point.
 
-Stage 1: direct sandbox control (`brokkr sandbox ...`), no LLM yet. Every
-sandbox execution goes through AuditStore, so `brokkr sandbox exec` is
-also the tool used to manually verify the sandbox's own safety guarantees
+`brokkr sandbox ...` (Stage 1) is direct, no-LLM sandbox control -- also
+the tool used to manually verify the sandbox's own safety guarantees
 (see the Stage 1 verification checklist in
 ~/.claude/plans/partitioned-fluttering-sonnet.md) -- rm -rf /, a hung
-process, a network call -- before any LLM is ever wired in to propose
-commands on its own.
+process, a network call -- and it deliberately has no policy blocklist
+gate of its own, since that verification depends on catastrophic
+commands actually reaching the sandbox mechanism.
+
+`brokkr propose` (Stage 2) is where a model gets involved: it proposes a
+command, a human approves/edits/rejects it, and only *then* -- right
+before anything runs -- does permissions/policy.py's static blocklist get
+checked, as defense in depth on top of the Docker boundary that Stage 1
+already proved. Still no approval memory here; every proposal is reviewed
+fresh (that's Stage 3).
 """
 
 from __future__ import annotations
 
+import shlex
+
 import typer
 from rich.console import Console
+from rich.prompt import Prompt
 from rich.table import Table
 
 from brokkr import __version__
 from brokkr.audit.store import AuditStore
 from brokkr.config import load_settings
+from brokkr.llm.client import OllamaClient
+from brokkr.permissions.policy import check_prohibited
 from brokkr.sandbox.docker_sandbox import DockerSandbox, SandboxError
 
 app = typer.Typer(help="brokkr -- a local, sandboxed, tool-augmented LLM agent.")
@@ -51,13 +63,14 @@ def sandbox_exec(
     sandbox = DockerSandbox(settings)
     audit = AuditStore(settings)
 
+    command_id = audit.new_command_id()
     try:
         result = sandbox.exec(argv, timeout=timeout)
     except SandboxError as exc:
         console.print(f"[red]sandbox error:[/red] {exc}")
         raise typer.Exit(code=1) from exc
 
-    command_id = audit.record_execution(result, source="manual")
+    audit.record_execution(command_id, result, source="manual")
 
     if result.stdout:
         console.print(result.stdout, end="")
@@ -95,6 +108,84 @@ def sandbox_status() -> None:
     table.add_row("status", container.status)
     table.add_row("image", settings.sandbox.image)
     console.print(table)
+
+
+@app.command()
+def propose(
+    task: str = typer.Argument(..., help="Plain-language description of what to do."),
+    model: str | None = typer.Option(
+        None, "--model", help="Override the configured default Ollama model."
+    ),
+    timeout: float | None = typer.Option(
+        None, "--timeout", help="Override the configured per-command sandbox timeout (seconds)."
+    ),
+) -> None:
+    """Asks the model to propose a command for TASK, shows you its
+    reasoning, and lets you run it as-is, edit it, or reject it. Nothing
+    runs without that confirmation, and the proposal, your decision, and
+    (if anything ran) the execution are all recorded under one shared
+    command_id -- see logs/audit.db."""
+    settings = load_settings()
+    audit = AuditStore(settings)
+    command_id = audit.new_command_id()
+
+    client = OllamaClient(settings)
+    result = client.propose(task, model=model)
+    audit.record_proposal(command_id, result)
+
+    if result.error:
+        console.print(f"[red]proposal failed:[/red] {result.error}")
+        raise typer.Exit(code=1)
+
+    proposal = result.proposal
+    assert proposal is not None  # result.error is None, so propose() guarantees this
+    console.print(f"[dim]reasoning:[/dim] {proposal.reasoning}")
+    console.print(f"[bold]command:[/bold] {shlex.join(proposal.argv)}")
+
+    choice = Prompt.ask(
+        "Run this? [y]es / [e]dit / [n]o", choices=["y", "e", "n"], default="n"
+    )
+
+    if choice == "n":
+        audit.record_decision(command_id, "rejected", None)
+        console.print("[yellow]rejected, nothing ran[/yellow]")
+        raise typer.Exit(code=0)
+
+    if choice == "e":
+        edited = Prompt.ask("Edit command", default=shlex.join(proposal.argv))
+        final_argv = shlex.split(edited)
+        decision = "edited"
+    else:
+        final_argv = proposal.argv
+        decision = "approved"
+
+    blocked_reason = check_prohibited(final_argv)
+    if blocked_reason is not None:
+        audit.record_decision(command_id, "blocked", final_argv, reason=blocked_reason)
+        console.print(f"[red]blocked by policy:[/red] {blocked_reason}")
+        raise typer.Exit(code=1)
+
+    audit.record_decision(command_id, decision, final_argv)
+
+    sandbox = DockerSandbox(settings)
+    try:
+        exec_result = sandbox.exec(final_argv, timeout=timeout)
+    except SandboxError as exc:
+        console.print(f"[red]sandbox error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    audit.record_execution(command_id, exec_result, source=f"llm_{decision}")
+
+    if exec_result.stdout:
+        console.print(exec_result.stdout, end="")
+    if exec_result.stderr:
+        console.print(f"[red]{exec_result.stderr}[/red]", end="")
+
+    status = "timed out" if exec_result.timed_out else f"exit {exec_result.exit_code}"
+    console.print(
+        f"\n[dim]-- {status}, {exec_result.duration_ms:.0f}ms, command_id={command_id}[/dim]"
+    )
+    raise typer.Exit(code=124 if exec_result.timed_out else exec_result.exit_code)
 
 
 if __name__ == "__main__":
