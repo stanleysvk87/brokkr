@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import pytest
+from typer.testing import CliRunner
 
+from brokkr import cli
 from brokkr.config import SandboxConfig, Settings
-from brokkr.memory.store import MemoryStore
+from brokkr.memory.store import MemoryStore, MemoryValidationError
 
 
 @pytest.fixture
@@ -36,6 +38,27 @@ def test_add_and_list_most_recent_first(settings):
 
     assert first.note == "first note"
     assert [entry.id for entry in store.list_all()] == [second.id, first.id]
+
+
+@pytest.mark.parametrize("note", ["", " ", "\t\n"])
+def test_empty_or_whitespace_note_is_rejected_without_storage(settings, note):
+    store = MemoryStore(settings)
+
+    with pytest.raises(MemoryValidationError, match="memory note must not be empty"):
+        store.add(note)
+
+    assert store.list_all() == []
+
+
+def test_empty_note_cli_error_is_clear_and_stores_nothing(settings, monkeypatch):
+    monkeypatch.setattr(cli, "_load_settings", lambda: settings)
+
+    result = CliRunner().invoke(cli.app, ["memory", "add", "   "])
+
+    assert result.exit_code == 1
+    assert "memory not added: memory note must not be empty" in result.output
+    assert "Traceback" not in result.output
+    assert MemoryStore(settings).list_all() == []
 
 
 def test_recent_is_bounded_and_chronological(settings):

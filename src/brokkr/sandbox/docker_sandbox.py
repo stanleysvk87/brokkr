@@ -128,6 +128,10 @@ class DockerSandbox:
                 return self._client.images.get(image_name).id
             except ImageNotFound:
                 pass
+            except APIError as exc:
+                raise SandboxError(
+                    f"failed to inspect sandbox image {image_name!r}: {exc}"
+                ) from exc
 
         logger.info("Building sandbox image %s from %s", image_name, _DOCKERFILE_DIR)
         image, _build_log = self._client.images.build(

@@ -52,6 +52,24 @@ def test_container_creation_api_error_becomes_sandbox_error(sandbox, monkeypatch
         sandbox.ensure_running()
 
 
+def test_invalid_image_reference_api_error_becomes_sandbox_error(sandbox):
+    def _raise_api_error(image_name):
+        raise APIError("400 Client Error: invalid reference format")
+
+    sandbox._settings = sandbox._settings.model_copy(
+        update={
+            "sandbox": sandbox._settings.sandbox.model_copy(update={"image": "INVALID IMAGE"})
+        }
+    )
+    sandbox._client = SimpleNamespace(images=SimpleNamespace(get=_raise_api_error))
+
+    with pytest.raises(
+        SandboxError,
+        match="failed to inspect sandbox image 'INVALID IMAGE'.*invalid reference format",
+    ):
+        sandbox.build_image()
+
+
 def test_container_creation_enables_init_reaper(sandbox, monkeypatch):
     captured = {}
     container = SimpleNamespace(id="container-id")

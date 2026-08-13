@@ -46,10 +46,10 @@ from brokkr.approvals.store import (
     validate_workflow_name,
 )
 from brokkr.audit.store import AuditStore, ManualDecision
-from brokkr.config import Settings, load_settings
+from brokkr.config import ConfigError, Settings, load_settings
 from brokkr.doctor import DoctorCheck, run_doctor
 from brokkr.llm.client import OllamaClient
-from brokkr.memory.store import MemoryStore
+from brokkr.memory.store import MemoryStore, MemoryValidationError
 from brokkr.permissions.policy import check_prohibited
 from brokkr.sandbox.docker_sandbox import (
     DockerSandbox,
@@ -86,8 +86,16 @@ class ProposalServices:
     client: OllamaClient
 
 
+def _load_settings() -> Settings:
+    try:
+        return load_settings()
+    except ConfigError as exc:
+        console.print(f"[red]configuration error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+
 def _proposal_services(settings: Settings | None = None) -> ProposalServices:
-    loaded_settings = settings or load_settings()
+    loaded_settings = settings or _load_settings()
     return ProposalServices(
         settings=loaded_settings,
         audit=AuditStore(loaded_settings),
@@ -253,7 +261,7 @@ def version() -> None:
 @app.command()
 def doctor() -> None:
     """Check local setup health without changing or executing anything."""
-    report = run_doctor(load_settings())
+    report = run_doctor(_load_settings())
     for check in report.checks:
         _print_doctor_check(check)
 
@@ -302,7 +310,7 @@ def history(
     ),
 ) -> None:
     """List recent proposal decisions and outcomes from the audit trail."""
-    entries = AuditStore(load_settings()).list_history(
+    entries = AuditStore(_load_settings()).list_history(
         limit=limit, decision=decision, workflow=workflow
     )
     if not entries:
@@ -350,7 +358,7 @@ def sandbox_exec(
     """Runs a command directly inside the sandbox container. No LLM, no
     approval flow -- you're typing the exact command yourself. Every run
     is fully recorded (logs/audit.db, logs/blobs/, logs/audit.jsonl)."""
-    settings = load_settings()
+    settings = _load_settings()
     sandbox = DockerSandbox(settings)
     audit = AuditStore(settings)
 
@@ -376,7 +384,7 @@ def sandbox_exec(
 def sandbox_reset() -> None:
     """Stops and removes the sandbox container. The next command creates
     it fresh -- new rootfs, nothing carried over."""
-    settings = load_settings()
+    settings = _load_settings()
     sandbox = DockerSandbox(settings)
     sandbox.reset()
     console.print("[green]sandbox container reset[/green]")
@@ -385,7 +393,7 @@ def sandbox_reset() -> None:
 @sandbox_app.command("status")
 def sandbox_status() -> None:
     """Shows whether the sandbox container exists and its current state."""
-    settings = load_settings()
+    settings = _load_settings()
     sandbox = DockerSandbox(settings)
     container = sandbox.existing_container()
     if container is None:
@@ -661,7 +669,7 @@ def manual_show(
     command_id: str = typer.Argument(..., help="Full command id or a unique short prefix."),
 ) -> None:
     """Shows a result file for a command you ran yourself."""
-    settings = load_settings()
+    settings = _load_settings()
     decision = _resolve_manual_decision(AuditStore(settings), command_id)
     result_path = _manual_result_path(settings, decision.command_id)
     shown_path = _display_path(result_path)
@@ -736,7 +744,7 @@ def workflow_save(
     ),
 ) -> None:
     """Saves recent individually reviewed commands as a named workflow."""
-    settings = load_settings()
+    settings = _load_settings()
     audit = AuditStore(settings)
     approvals = ApprovalStore(settings)
     try:
@@ -779,7 +787,7 @@ def workflow_save(
 @workflow_app.command("list")
 def workflow_list() -> None:
     """Lists saved workflows."""
-    workflows = ApprovalStore(load_settings()).list_workflows()
+    workflows = ApprovalStore(_load_settings()).list_workflows()
     if not workflows:
         console.print("[yellow]no saved workflows[/yellow]")
         return
@@ -797,7 +805,7 @@ def workflow_list() -> None:
 @workflow_app.command("show")
 def workflow_show(name: str = typer.Argument(...)) -> None:
     """Shows every saved step without running anything."""
-    workflow = ApprovalStore(load_settings()).get_workflow(name)
+    workflow = ApprovalStore(_load_settings()).get_workflow(name)
     if workflow is None:
         console.print(f"[yellow]no workflow named {name}[/yellow]")
         raise typer.Exit(code=1)
@@ -807,7 +815,7 @@ def workflow_show(name: str = typer.Argument(...)) -> None:
 @workflow_app.command("delete")
 def workflow_delete(name: str = typer.Argument(...)) -> None:
     """Deletes a saved workflow without changing its source approvals."""
-    if ApprovalStore(load_settings()).delete_workflow(name):
+    if ApprovalStore(_load_settings()).delete_workflow(name):
         console.print(f"[green]deleted workflow {name}[/green]")
     else:
         console.print(f"[yellow]no workflow named {name}[/yellow]")
@@ -822,7 +830,7 @@ def workflow_run(
     ),
 ) -> None:
     """Explicitly runs a saved workflow, stopping at the first failed step."""
-    settings = load_settings()
+    settings = _load_settings()
     approvals = ApprovalStore(settings)
     workflow = approvals.get_workflow(name)
     if workflow is None:
@@ -929,7 +937,7 @@ def workflow_run(
 @approvals_app.command("list")
 def approvals_list() -> None:
     """Lists exact remembered commands and human-authored templates."""
-    settings = load_settings()
+    settings = _load_settings()
     approvals = ApprovalStore(settings)
     remembered = approvals.list_all()
     templates = approvals.list_templates()
@@ -972,7 +980,7 @@ def approvals_revoke(
     approval_id: str = typer.Argument(..., help="id shown by `brokkr approvals list`."),
 ) -> None:
     """Revokes an exact remembered command or an approval template."""
-    settings = load_settings()
+    settings = _load_settings()
     approvals = ApprovalStore(settings)
     revoked = (
         approvals.revoke_template(approval_id)
@@ -989,15 +997,19 @@ def approvals_revoke(
 @memory_app.command("add")
 def memory_add(note: str = typer.Argument(..., help="Workspace context to remember.")) -> None:
     """Adds an explicit human-authored note for future proposals."""
-    settings = load_settings()
-    entry = MemoryStore(settings).add(note)
+    settings = _load_settings()
+    try:
+        entry = MemoryStore(settings).add(note)
+    except MemoryValidationError as exc:
+        console.print(f"[red]memory not added:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
     console.print(f"[green]added memory {entry.id}[/green]")
 
 
 @memory_app.command("list")
 def memory_list() -> None:
     """Lists workspace notes, most recent first."""
-    settings = load_settings()
+    settings = _load_settings()
     notes = MemoryStore(settings).list_all()
     if not notes:
         console.print("[yellow]no memory notes[/yellow]")
@@ -1014,7 +1026,7 @@ def memory_forget(
     note_id: int = typer.Argument(..., help="id shown by `brokkr memory list`."),
 ) -> None:
     """Removes a workspace note from future proposal context."""
-    settings = load_settings()
+    settings = _load_settings()
     if MemoryStore(settings).forget(note_id):
         console.print(f"[green]forgot memory {note_id}[/green]")
     else:

@@ -788,3 +788,20 @@ Regression tests cover attach/exec/detach ordering, the untouched default
 path, exception and timeout cleanup, persistent bridge behavior, concurrent
 isolation, both CLI entry points, model-flag-without-grant behavior, optional
 schema compatibility, audit values, and migration of an existing audit DB.
+
+## Dogfooding error-boundary fixes — 2026-08-13
+
+Round 28's free-form deployment and REPL dogfooding found three ordinary
+operator errors that escaped as Python tracebacks or persisted meaningless
+state. Malformed numeric `BROKKR_*` settings and directories that cannot be
+created now become explicit configuration errors naming the setting, supplied
+value or path, and underlying filesystem reason. Every CLI path that loads
+settings, including `brokkr doctor`, presents those failures without a
+traceback.
+
+An invalid Docker image reference encountered while preparing an execution is
+now normalized to the existing `SandboxError` boundary. A one-shot proposal
+still fails clearly, while interactive mode cancels only that turn and accepts
+the next task. Explicit memory entry also rejects empty and whitespace-only
+notes before opening a write transaction; non-empty human-authored text and
+the rest of the memory policy remain unchanged.

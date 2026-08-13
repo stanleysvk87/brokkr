@@ -39,6 +39,10 @@ class Note:
     created_at: str
 
 
+class MemoryValidationError(ValueError):
+    pass
+
+
 class MemoryStore:
     def __init__(self, settings: Settings) -> None:
         self._db_path: Path = settings.memory_db_path
@@ -53,6 +57,8 @@ class MemoryStore:
         return conn
 
     def add(self, note: str) -> Note:
+        if not note.strip():
+            raise MemoryValidationError("memory note must not be empty")
         now = datetime.now(timezone.utc).isoformat()
         with self._connect() as conn:
             cursor = conn.execute(

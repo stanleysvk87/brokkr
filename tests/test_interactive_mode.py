@@ -3,9 +3,15 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import typer
+from docker.errors import APIError
 from typer.testing import CliRunner
 
 from brokkr import cli
+from brokkr.config import SandboxConfig, Settings
+from brokkr.sandbox.docker_sandbox import (
+    DockerSandbox,
+    SandboxExecutionResult,
+)
 
 
 def test_propose_command_and_repl_route_through_same_shared_function(monkeypatch):
@@ -147,6 +153,82 @@ def test_task_exit_status_ends_only_that_repl_turn(monkeypatch):
 
     assert result.exit_code == 0
     assert received == ["first task", "second task"]
+
+
+def test_invalid_image_error_ends_only_that_repl_turn(monkeypatch, tmp_path):
+    settings = Settings(
+        ollama_url="http://127.0.0.1:11434",
+        default_model="test-model",
+        data_dir=tmp_path / "data",
+        log_dir=tmp_path / "logs",
+        log_level="INFO",
+        sandbox=SandboxConfig(image="INVALID IMAGE"),
+        approval_template_matching=False,
+    )
+    bad_sandbox = DockerSandbox.__new__(DockerSandbox)
+    bad_sandbox._settings = settings
+
+    def _raise_api_error(image_name):
+        raise APIError("400 Client Error: invalid reference format")
+
+    bad_sandbox._client = SimpleNamespace(images=SimpleNamespace(get=_raise_api_error))
+
+    class FirstSandbox:
+        def exec(self, argv, timeout=None, network=False):
+            bad_sandbox.build_image()
+
+    successful_result = SandboxExecutionResult(
+        command=["printf", "ok"],
+        exit_code=0,
+        timed_out=False,
+        truncated=False,
+        stdout="second task ran\n",
+        stderr="",
+        duration_ms=1.0,
+        container_id="container-id",
+        image_id="image-id",
+    )
+    sandboxes = iter([FirstSandbox(), SimpleNamespace(exec=lambda *args, **kwargs: successful_result)])
+    monkeypatch.setattr(cli, "DockerSandbox", lambda loaded_settings: next(sandboxes))
+
+    tasks = []
+
+    class FakeClient:
+        def propose(self, task, model=None, notes=None):
+            tasks.append(task)
+            return SimpleNamespace(
+                error=None,
+                proposal=SimpleNamespace(
+                    reasoning="test",
+                    argv=["printf", "ok"],
+                    needs_network=False,
+                ),
+            )
+
+    services = cli.ProposalServices(
+        settings=settings,
+        audit=SimpleNamespace(
+            new_command_id=lambda: "a" * 32,
+            record_proposal=lambda *args: None,
+            record_decision=lambda *args, **kwargs: None,
+            record_execution=lambda *args, **kwargs: None,
+        ),
+        approvals=SimpleNamespace(
+            find=lambda argv: SimpleNamespace(command_hash="remembered"),
+            mark_used=lambda command_hash: None,
+        ),
+        memory=SimpleNamespace(recent=lambda limit: []),
+        client=FakeClient(),
+    )
+    monkeypatch.setattr(cli, "_proposal_services", lambda: services)
+
+    result = CliRunner().invoke(cli.app, [], input="first task\nsecond task\nexit\n")
+
+    assert result.exit_code == 0
+    assert tasks == ["first task", "second task"]
+    assert "sandbox error" in result.output
+    assert "invalid reference format" in result.output
+    assert "second task ran" in result.output
 
 
 def test_eof_inside_a_sub_prompt_ends_only_that_turn(monkeypatch):
