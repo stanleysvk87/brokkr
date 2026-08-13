@@ -147,3 +147,24 @@ def test_task_exit_status_ends_only_that_repl_turn(monkeypatch):
 
     assert result.exit_code == 0
     assert received == ["first task", "second task"]
+
+
+def test_eof_inside_a_sub_prompt_ends_only_that_turn(monkeypatch):
+    # Reproduces a real bug found by dogfooding: stdin running out exactly
+    # at _run_proposal's own "Run this? [y/e/n/m]" prompt raised EOFError
+    # (Rich's Prompt.ask, not typer.Exit), which the REPL loop didn't catch
+    # -- it propagated past the loop and crashed the whole session instead
+    # of just cancelling that one task.
+    received = []
+    monkeypatch.setattr(cli, "_proposal_services", lambda: object())
+
+    def run(task, services, **options):
+        received.append(task)
+        raise EOFError
+
+    monkeypatch.setattr(cli, "_run_proposal", run)
+
+    result = CliRunner().invoke(cli.app, [], input="first task\nsecond task\nexit\n")
+
+    assert result.exit_code == 0
+    assert received == ["first task", "second task"]

@@ -551,6 +551,13 @@ def _interactive_session(
             # A task's exit status ends `brokkr propose`, but only ends that
             # turn in the interactive session.
             continue
+        except EOFError:
+            # EOF while a sub-prompt (e.g. "Run this? [y/e/n/m]") is open --
+            # Rich's Prompt.ask raises EOFError directly, distinct from the
+            # top-level `console.input()` EOFError caught above, which ends
+            # the whole session. Mid-task EOF only cancels that one turn.
+            console.print()
+            continue
 
 
 @app.callback(invoke_without_command=True)
