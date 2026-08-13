@@ -889,3 +889,19 @@ target: when there is no file, path, or discoverable description at all, the
 model must use read-only workspace discovery instead of inventing a mutation.
 The existing vague-description guidance and all deterministic safety gates are
 unchanged.
+
+## CodeQL security scanning — 2026-08-13
+
+Added a standalone GitHub Actions workflow for semantic Python security
+analysis with CodeQL. It runs on pushes to `master`, pull requests, and a
+weekly schedule so the unchanged codebase is rechecked as GitHub's default
+query suite evolves. The workflow uses the current stable CodeQL Action major
+and grants only the permissions needed to read the repository and Actions
+metadata and upload security events.
+
+This is deliberately separate from the test, lint, privacy, and Docker CI
+workflow because its schedule and write permission have a different purpose.
+There are no custom query packs, application changes, Dependabot configuration,
+or additional badge. Local checks can validate the workflow structure and the
+unchanged test suite, but the first real CodeQL analysis and Security-tab result
+will occur only after a human pushes the commit.
