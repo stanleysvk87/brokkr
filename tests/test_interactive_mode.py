@@ -214,6 +214,7 @@ def test_invalid_image_error_ends_only_that_repl_turn(monkeypatch, tmp_path):
             record_execution=lambda *args, **kwargs: None,
         ),
         approvals=SimpleNamespace(
+            search_library=lambda task: [],
             find=lambda argv: SimpleNamespace(command_hash="remembered"),
             mark_used=lambda command_hash: None,
         ),

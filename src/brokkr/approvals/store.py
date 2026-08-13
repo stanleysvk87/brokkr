@@ -4,7 +4,7 @@ A command is auto-approved either when its argv is byte-for-byte identical
 (as a canonical JSON array) to one a human explicitly chose to remember, or
 when optional template matching is enabled and every human-authored template
 constraint matches. Templates are never inferred or suggested by the model.
-Semantic/embedding similarity was deliberately rejected as a matching
+Semantic/embedding similarity was deliberately rejected as an approval-matching
 strategy: `rm file.txt` and `rm -rf /` can be "similar" by any embedding
 distance, but their consequences are not remotely comparable, which makes
 "similar" a bad axis for a decision that skips human review.
@@ -15,6 +15,11 @@ I willing to auto-run"); the audit trail is an append-only record of what
 actually happened. Mixing them would make it awkward to, say, ship
 someone your approvals list without also handing over your command
 history.
+
+Named workflows and library entries share this database because they are also
+mutable, human-curated command state, but neither is an approval match. Library
+description lookup uses transparent keyword overlap only to offer an entry
+before a model call; it always requires a fresh human choice and never auto-runs.
 """
 
 from __future__ import annotations
@@ -67,10 +72,112 @@ CREATE TABLE IF NOT EXISTS workflow_steps (
     PRIMARY KEY (workflow_name, position),
     FOREIGN KEY (workflow_name) REFERENCES workflows(name) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS library_entries (
+    name TEXT PRIMARY KEY,
+    description TEXT NOT NULL,
+    argv_json TEXT NOT NULL,
+    template_id TEXT,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT,
+    use_count INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS library_metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 _WORKSPACE_ROOT = PurePosixPath("/workspace")
 _CONSTRAINT_TYPES = {"path_under_workdir", "enum", "regex"}
+_LIBRARY_SEED_VERSION = "1"
+_LIBRARY_MATCH_THRESHOLD = 0.5
+_LIBRARY_STOP_WORDS = {
+    "and",
+    "for",
+    "from",
+    "into",
+    "last",
+    "the",
+    "this",
+    "with",
+    "workspace",
+}
+_SEEDED_LIBRARY_ENTRIES = (
+    (
+        "workspace-disk-usage",
+        "Show how much disk space the workspace files use in total",
+        ["du", "-sh", "/workspace"],
+    ),
+    (
+        "find-large-files",
+        "Find large files over 100 MB in the workspace",
+        ["find", "/workspace", "-type", "f", "-size", "+100M", "-print"],
+    ),
+    (
+        "find-recent-files",
+        "Find files changed or modified during the last seven days",
+        ["find", "/workspace", "-type", "f", "-mtime", "-7", "-print"],
+    ),
+    (
+        "archive-workspace",
+        "Create a compressed tar gz archive backup of the whole workspace",
+        [
+            "bash",
+            "-c",
+            (
+                "tar -czf /tmp/brokkr-workspace.tar.gz --exclude=workspace.tar.gz "
+                "-C /workspace . && "
+                "mv /tmp/brokkr-workspace.tar.gz /workspace/workspace.tar.gz"
+            ),
+        ],
+    ),
+    (
+        "extract-tar-archive",
+        "Extract a tar gz archive into the workspace",
+        [
+            "bash",
+            "-c",
+            (
+                "mkdir -p /workspace/extracted-tar && "
+                "tar -xzf /workspace/archive.tar.gz -C /workspace/extracted-tar"
+            ),
+        ],
+    ),
+    (
+        "extract-zip-archive",
+        "Extract a zip archive into the workspace",
+        [
+            "bash",
+            "-c",
+            (
+                "mkdir -p /workspace/extracted-zip && "
+                "unzip -o /workspace/archive.zip -d /workspace/extracted-zip"
+            ),
+        ],
+    ),
+    (
+        "count-todo-lines",
+        "Count lines containing TODO in the workspace input text file",
+        ["grep", "-c", "--", "TODO", "/workspace/input.txt"],
+    ),
+    (
+        "extract-pdf-text",
+        "Extract readable text from a PDF document in the workspace",
+        ["pdftotext", "/workspace/document.pdf", "/workspace/document.txt"],
+    ),
+    (
+        "ocr-scanned-image",
+        "Run OCR on a scanned image and save the recognized text",
+        ["tesseract", "/workspace/scan.png", "/workspace/ocr"],
+    ),
+    (
+        "git-worktree-status",
+        "Show git status and changed files for the workspace repository",
+        ["git", "-C", "/workspace/repo", "status", "--short", "--branch"],
+    ),
+)
 
 
 @dataclass
@@ -123,12 +230,33 @@ class Workflow:
     use_count: int
 
 
+@dataclass(frozen=True)
+class LibraryEntry:
+    name: str
+    description: str
+    argv: list[str]
+    template_id: str | None
+    created_at: str
+    last_used_at: str | None
+    use_count: int
+
+
+@dataclass(frozen=True)
+class LibraryMatch:
+    entry: LibraryEntry
+    score: float
+
+
 class TemplateValidationError(ValueError):
     """Raised when a human-authored template cannot be saved safely."""
 
 
 class WorkflowValidationError(ValueError):
     """Raised when a human-authored workflow is invalid or cannot resolve."""
+
+
+class LibraryValidationError(ValueError):
+    """Raised when a human-curated library entry is invalid or cannot resolve."""
 
 
 def validate_workflow_name(name: str) -> str:
@@ -140,6 +268,21 @@ def validate_workflow_name(name: str) -> str:
     if len(normalized) > 64:
         raise WorkflowValidationError("workflow name must be at most 64 characters")
     return normalized
+
+
+def validate_library_name(name: str) -> str:
+    try:
+        return validate_workflow_name(name)
+    except WorkflowValidationError as exc:
+        raise LibraryValidationError(str(exc).replace("workflow name", "library name")) from exc
+
+
+def _library_keywords(value: str) -> set[str]:
+    return {
+        word
+        for word in re.findall(r"[^\W_]+", value.lower())
+        if len(word) >= 3 and word not in _LIBRARY_STOP_WORDS
+    }
 
 
 def command_hash(argv: list[str]) -> str:
@@ -238,6 +381,32 @@ class ApprovalStore:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            self._seed_library(conn)
+
+    @staticmethod
+    def _seed_library(conn: sqlite3.Connection) -> None:
+        seeded = conn.execute(
+            "SELECT value FROM library_metadata WHERE key = 'seed_version'"
+        ).fetchone()
+        if seeded is not None:
+            return
+
+        now = datetime.now(timezone.utc).isoformat()
+        conn.executemany(
+            """
+            INSERT OR IGNORE INTO library_entries (
+                name, description, argv_json, template_id, created_at, use_count
+            ) VALUES (?, ?, ?, NULL, ?, 0)
+            """,
+            [
+                (name, description, json.dumps(argv, ensure_ascii=False), now)
+                for name, description, argv in _SEEDED_LIBRARY_ENTRIES
+            ],
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO library_metadata (key, value) VALUES ('seed_version', ?)",
+            (_LIBRARY_SEED_VERSION,),
+        )
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path)
@@ -380,6 +549,152 @@ class ApprovalStore:
                 "SELECT * FROM approval_templates WHERE id = ?", (template_id,)
             ).fetchone()
         return self._row_to_template(row) if row else None
+
+    def create_library_entry(
+        self,
+        name: str,
+        description: str,
+        argv: list[str],
+        template_id: str | None = None,
+    ) -> LibraryEntry:
+        normalized_name = validate_library_name(name)
+        normalized_description = description.strip()
+        if not normalized_description:
+            raise LibraryValidationError("library description must not be empty")
+        if not argv or any(not isinstance(value, str) for value in argv):
+            raise LibraryValidationError("library command must be a non-empty argv")
+
+        if template_id is not None:
+            template = self._library_template(template_id, normalized_name)
+            if not _template_matches(template, argv):
+                raise LibraryValidationError(
+                    f"template {template_id} does not match library command {normalized_name}"
+                )
+
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO library_entries (
+                        name, description, argv_json, template_id, created_at, use_count
+                    ) VALUES (?, ?, ?, ?, ?, 0)
+                    """,
+                    (
+                        normalized_name,
+                        normalized_description,
+                        json.dumps(argv, ensure_ascii=False),
+                        template_id,
+                        now,
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise LibraryValidationError(
+                f"library entry {normalized_name!r} already exists"
+            ) from exc
+        entry = self.get_library_entry(normalized_name)
+        assert entry is not None
+        return entry
+
+    def get_library_entry(self, name: str) -> LibraryEntry | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM library_entries WHERE name = ?", (name,)
+            ).fetchone()
+        return self._row_to_library_entry(row) if row else None
+
+    def list_library_entries(self) -> list[LibraryEntry]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM library_entries ORDER BY created_at DESC, name"
+            ).fetchall()
+        return [self._row_to_library_entry(row) for row in rows]
+
+    def delete_library_entry(self, name: str) -> bool:
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM library_entries WHERE name = ?", (name,))
+        return cursor.rowcount > 0
+
+    def mark_library_entry_used(self, name: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE library_entries
+                SET last_used_at = ?, use_count = use_count + 1
+                WHERE name = ?
+                """,
+                (now, name),
+            )
+
+    def search_library(self, task: str) -> list[LibraryMatch]:
+        task_words = _library_keywords(task)
+        if len(task_words) < 2:
+            return []
+
+        matches: list[LibraryMatch] = []
+        for entry in self.list_library_entries():
+            description_words = _library_keywords(entry.description)
+            shared = task_words & description_words
+            if len(shared) < 2:
+                continue
+            score = len(shared) / min(len(task_words), len(description_words))
+            if score >= _LIBRARY_MATCH_THRESHOLD:
+                matches.append(LibraryMatch(entry, score))
+        return sorted(matches, key=lambda match: (-match.score, match.entry.name))
+
+    def validate_library_reference(self, entry: LibraryEntry) -> None:
+        if entry.template_id is not None:
+            template = self._library_template(entry.template_id, entry.name)
+            if not _template_matches(template, entry.argv):
+                raise LibraryValidationError(
+                    f"template {entry.template_id} no longer matches library entry {entry.name}"
+                )
+
+    def resolve_library_entry(
+        self, entry: LibraryEntry, variable_value: str | None = None
+    ) -> list[str]:
+        if entry.template_id is None:
+            return list(entry.argv)
+
+        template = self._library_template(entry.template_id, entry.name)
+        if variable_value is None:
+            raise LibraryValidationError(
+                f"library entry {entry.name} requires a value for its template variable"
+            )
+        variable_parts = [part.variable for part in template.parts if part.variable is not None]
+        constraint = variable_parts[0]
+        assert constraint is not None
+        if not constraint_matches(constraint, variable_value):
+            raise LibraryValidationError(
+                f"value {variable_value!r} does not satisfy {constraint.constraint_type}"
+            )
+        return [
+            part.literal if part.literal is not None else variable_value
+            for part in template.parts
+        ]
+
+    def format_library_command(self, entry: LibraryEntry) -> str:
+        if entry.template_id is None:
+            return shlex.join(entry.argv)
+        return format_template(self._library_template(entry.template_id, entry.name))
+
+    def _library_template(self, template_id: str, entry_name: str) -> ApprovalTemplate:
+        try:
+            template = self.get_template(template_id)
+        except (KeyError, TypeError, TemplateValidationError, json.JSONDecodeError) as exc:
+            raise LibraryValidationError(
+                f"library entry {entry_name} references invalid template {template_id}"
+            ) from exc
+        if template is None:
+            raise LibraryValidationError(
+                f"library entry {entry_name} references missing template {template_id}"
+            )
+        if sum(part.variable is not None for part in template.parts) != 1:
+            raise LibraryValidationError(
+                f"library entry {entry_name} template {template_id} must have exactly one variable"
+            )
+        return template
 
     def prepare_workflow_steps(
         self,
@@ -647,6 +962,32 @@ class ApprovalStore:
             command_hash=row["command_hash"],
             argv=json.loads(row["argv_json"]),
             task_description=row["task_description"],
+            created_at=row["created_at"],
+            last_used_at=row["last_used_at"],
+            use_count=row["use_count"],
+        )
+
+    @staticmethod
+    def _row_to_library_entry(row: sqlite3.Row) -> LibraryEntry:
+        try:
+            argv = json.loads(row["argv_json"])
+        except json.JSONDecodeError as exc:
+            raise LibraryValidationError(
+                f"library entry {row['name']} has invalid command data"
+            ) from exc
+        if (
+            not isinstance(argv, list)
+            or not argv
+            or any(not isinstance(value, str) for value in argv)
+        ):
+            raise LibraryValidationError(
+                f"library entry {row['name']} must contain a non-empty string argv"
+            )
+        return LibraryEntry(
+            name=row["name"],
+            description=row["description"],
+            argv=argv,
+            template_id=row["template_id"],
             created_at=row["created_at"],
             last_used_at=row["last_used_at"],
             use_count=row["use_count"],

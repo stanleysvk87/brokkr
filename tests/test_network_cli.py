@@ -76,7 +76,10 @@ def _install_propose(monkeypatch, settings, *, allow_network, needs_network):
     monkeypatch.setattr(
         cli,
         "ApprovalStore",
-        lambda loaded: SimpleNamespace(find=lambda argv: None),
+        lambda loaded: SimpleNamespace(
+            search_library=lambda task: [],
+            find=lambda argv: None,
+        ),
     )
     monkeypatch.setattr(
         cli,

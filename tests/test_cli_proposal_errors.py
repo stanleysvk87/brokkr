@@ -46,7 +46,11 @@ def test_propose_displays_short_user_error_and_keeps_technical_detail(monkeypatc
 
     monkeypatch.setattr(cli, "load_settings", lambda: SimpleNamespace(memory_max_notes=20))
     monkeypatch.setattr(cli, "AuditStore", FakeAudit)
-    monkeypatch.setattr(cli, "ApprovalStore", lambda settings: object())
+    monkeypatch.setattr(
+        cli,
+        "ApprovalStore",
+        lambda settings: SimpleNamespace(search_library=lambda task: []),
+    )
     monkeypatch.setattr(cli, "MemoryStore", FakeMemory)
     monkeypatch.setattr(cli, "OllamaClient", FakeClient)
     monkeypatch.setattr(cli, "console", SimpleNamespace(print=output.append))

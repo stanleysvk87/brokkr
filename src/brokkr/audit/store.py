@@ -30,6 +30,11 @@ debugged" is this project's actual stated purpose (see README) -- a
 silently dropped record would quietly break that promise instead of
 loudly surfacing a real problem (disk full, permissions) that the human
 running brokkr needs to know about immediately.
+
+Workflow and library replay have no model proposal row. They still mint a
+command_id before policy/execution, record a distinct decision and source, and
+attach the stored workflow or library name so the same audit formats remain
+queryable without pretending a model produced the command.
 """
 
 from __future__ import annotations
@@ -65,7 +70,8 @@ CREATE TABLE IF NOT EXISTS decisions (
     reason TEXT,
     workflow_run_id TEXT,
     workflow_name TEXT,
-    workflow_step INTEGER
+    workflow_step INTEGER,
+    library_name TEXT
 );
 
 CREATE TABLE IF NOT EXISTS commands (
@@ -82,7 +88,8 @@ CREATE TABLE IF NOT EXISTS commands (
     network_enabled INTEGER NOT NULL DEFAULT 0,
     workflow_run_id TEXT,
     workflow_name TEXT,
-    workflow_step INTEGER
+    workflow_step INTEGER,
+    library_name TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_commands_created_at ON commands (created_at);
@@ -157,6 +164,7 @@ class AuditStore:
                     "workflow_run_id": "TEXT",
                     "workflow_name": "TEXT",
                     "workflow_step": "INTEGER",
+                    "library_name": "TEXT",
                 },
             )
             self._ensure_columns(
@@ -166,6 +174,7 @@ class AuditStore:
                     "workflow_run_id": "TEXT",
                     "workflow_name": "TEXT",
                     "workflow_step": "INTEGER",
+                    "library_name": "TEXT",
                 },
             )
 
@@ -267,6 +276,7 @@ class AuditStore:
         workflow_run_id: str | None = None,
         workflow_name: str | None = None,
         workflow_step: int | None = None,
+        library_name: str | None = None,
     ) -> None:
         """Records the human or approval-gate outcome, including distinct
         exact and template auto-approval decisions."""
@@ -281,6 +291,7 @@ class AuditStore:
             "workflow_run_id": workflow_run_id,
             "workflow_name": workflow_name,
             "workflow_step": workflow_step,
+            "library_name": library_name,
         }
         self._write_blob(command_id, "decision", blob)
 
@@ -289,8 +300,8 @@ class AuditStore:
                 """
                 INSERT INTO decisions (
                     command_id, created_at, decision, final_argv_json, reason,
-                    workflow_run_id, workflow_name, workflow_step
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    workflow_run_id, workflow_name, workflow_step, library_name
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     command_id,
@@ -301,6 +312,7 @@ class AuditStore:
                     workflow_run_id,
                     workflow_name,
                     workflow_step,
+                    library_name,
                 ),
             )
 
@@ -315,6 +327,7 @@ class AuditStore:
                 "workflow_run_id": workflow_run_id,
                 "workflow_name": workflow_name,
                 "workflow_step": workflow_step,
+                "library_name": library_name,
             }
         )
 
@@ -388,6 +401,15 @@ class AuditStore:
                     FROM decisions AS d
                     LEFT JOIN commands AS c ON c.command_id = d.command_id
                     WHERE d.workflow_run_id IS NOT NULL
+                    UNION ALL
+                    SELECT
+                        d.command_id, d.created_at,
+                        'library ' || d.library_name,
+                        d.decision, d.reason, c.exit_code, c.timed_out, NULL,
+                        NULL, NULL, NULL
+                    FROM decisions AS d
+                    LEFT JOIN commands AS c ON c.command_id = d.command_id
+                    WHERE d.library_name IS NOT NULL
                 )
                 SELECT * FROM history_rows
                 WHERE (? IS NULL OR decision = ?)
@@ -423,6 +445,7 @@ class AuditStore:
         workflow_run_id: str | None = None,
         workflow_name: str | None = None,
         workflow_step: int | None = None,
+        library_name: str | None = None,
     ) -> None:
         """Records one sandbox execution across all three stores."""
         now = datetime.now(timezone.utc).isoformat()
@@ -434,6 +457,7 @@ class AuditStore:
             "workflow_run_id": workflow_run_id,
             "workflow_name": workflow_name,
             "workflow_step": workflow_step,
+            "library_name": library_name,
             **asdict(result),
         }
         self._write_blob(command_id, "execution", blob)
@@ -445,8 +469,8 @@ class AuditStore:
                     command_id, created_at, source, argv_json,
                     exit_code, timed_out, truncated, duration_ms,
                     container_id, image_id, network_enabled,
-                    workflow_run_id, workflow_name, workflow_step
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    workflow_run_id, workflow_name, workflow_step, library_name
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     command_id,
@@ -463,6 +487,7 @@ class AuditStore:
                     workflow_run_id,
                     workflow_name,
                     workflow_step,
+                    library_name,
                 ),
             )
 
@@ -480,5 +505,6 @@ class AuditStore:
                 "workflow_run_id": workflow_run_id,
                 "workflow_name": workflow_name,
                 "workflow_step": workflow_step,
+                "library_name": library_name,
             }
         )

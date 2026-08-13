@@ -253,6 +253,15 @@ issue.
   value must satisfy the existing human-authored template constraint. Any
   constraint failure, policy block, timeout, or non-zero exit stops the run;
   later steps do not execute and there is no continue-on-error option.
+- **Library keyword matches are suggestions, never approvals.** Matching uses
+  transparent word overlap against human-written descriptions and cannot run an
+  entry by itself. The human must choose `use` for each surfaced match, or type
+  the exact `brokkr library run <name>` invocation. Every resolved library argv
+  receives the current static blocklist check immediately before execution, even
+  after database tampering. A template-backed entry accepts one human-supplied
+  value through the existing constraint mechanism; task wording and model output
+  never fill it. Seed entries are confined to `/workspace` and require no network
+  or host privilege.
 
 ## Reporting a vulnerability
 

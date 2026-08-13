@@ -805,3 +805,31 @@ still fails clearly, while interactive mode cancels only that turn and accepts
 the next task. Explicit memory entry also rejects empty and whitespace-only
 notes before opening a write transaction; non-empty human-authored text and
 the rest of the memory policy remain unchanged.
+
+## Local script library — 2026-08-13
+
+Added a self-contained library of named, human-described commands as an
+alternative to asking the model to regenerate common scripts. `brokkr library`
+can save a directly authored command or the last human-approved proposal,
+list/show/delete entries, and explicitly run one by name. Fixed argv and an
+existing exactly-one-variable approval template are supported; the latter takes
+only a human-supplied value validated by the existing constraint mechanism.
+Policy is checked both when an entry is saved and immediately before every run.
+
+The shared proposal path now performs deliberately simple lowercase keyword
+overlap against human-written library descriptions before calling the model. It
+shows only the best plausible match and its command, then asks the human to
+choose `use` or `model`. Declining and no-match cases follow the previous model
+path unchanged. A match never auto-runs, never becomes an approval, and never
+uses embeddings, fuzzy search, or model judgment. Accepted and direct runs have
+distinct `library` decision/execution audit records naming the entry.
+
+Fresh and existing stores receive a one-time set of ten sandbox-safe commands:
+workspace disk usage, large and recent file lookup, tar creation/extraction,
+zip extraction, TODO-line counting, PDF text extraction, scanned-image OCR, and
+Git status. Deleting a seed is persistent. Every seed passed the static policy
+and was executed through a real Docker sandbox against prepared files, including
+real archives, a PDF-rendered scan, a sparse large file, and a Git worktree.
+Regression coverage also locks in both save paths, malformed quoting, blocked
+save and tamper-time execution, template resolution, keyword ranking, explicit
+accept/decline behavior, model fallback, audit migration, and usage tracking.

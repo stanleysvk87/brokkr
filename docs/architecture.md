@@ -3,7 +3,9 @@
 ## The pipeline
 
 Every proposal turn, whether entered through `brokkr propose` or bare
-`brokkr` interactive mode, enters the same four-gate pipeline. The
+`brokkr` interactive mode, first checks the local script library, then enters
+the same four-gate model pipeline if the human declines the match or no match
+exists. The
 human-decision gate is skipped when an exact or enabled template approval
 matches; every gate that does apply is independently visible in the audit trail:
 
@@ -11,6 +13,12 @@ matches; every gate that does apply is independently visible in the audit trail:
 task description
       |
       v
+  [0] library keyword lookup -- no match / human chooses model --+
+      |  human explicitly chooses a shown entry                    |
+      |                                                            v
+      +-------------------------------> [4] policy blocklist   [1] LLM proposal
+                                                               (pipeline below)
+
   [1] LLM proposal          brokkr/llm/client.py
       |  (structured output: {reasoning, argv, needs_network?})
       v
@@ -99,6 +107,12 @@ its own `command_id` and decision/execution rows, plus a shared
 `workflow_run_id`, workflow name, and step number. A blocked or unresolved step
 therefore remains auditable even though it has no execution row. `brokkr history`
 includes these steps, and `--workflow <name>` filters them.
+
+Library execution also has no proposal row. Its decision is `library`, its
+execution source is `library`, and both audit records name the selected entry.
+A policy-blocked or invalid/tampered library entry retains a `blocked` decision
+and no execution row. `brokkr history` includes direct and suggested library
+runs as `library <name>` entries.
 
 ## Manual/advisory results
 
@@ -216,7 +230,7 @@ was individually reviewed and the saved sequence is inspectable with
 for every resolved argv, and any non-zero exit or timeout prevents all later
 steps from running. There is deliberately no continue-on-error mode.
 
-## Possible eventual convergence: looking up a known-good script instead of generating one
+## Local script library: predictable lookup, explicit use
 
 Dogfooding found that "write a script that does X and save it as a
 reusable file" is a materially less reliable task shape than a single
@@ -224,14 +238,30 @@ direct command, across more than one local model — see
 docs/security-model.md's "What this deliberately does not defend
 against" section for the specific reproduced failures. Asking the model
 to generate fresh multi-line script content from scratch every time is
-one way to hit this task shape; it is not the only way to accomplish it.
+one way to hit this task shape; the local library provides the alternative.
+It stores a unique human-chosen name, human-written description, and fixed
+argv, or a reference to an existing approval template with exactly one
+variable. Entries are created only by `library save`, either from a directly
+authored shell-quoted command or the last human-approved proposal execution.
+There is no automatic capture from ordinary approvals.
 
-A curated catalog of already-written, already-tested scripts (were one
-available to query) sidesteps the generation-reliability problem
-entirely for anything already in it: instead of the model authoring new
-code, the task becomes "find the existing script that matches this
-description," which is a much easier and more checkable problem than
-generating correct multi-line shell code. This is not designed or
-scoped — noted here only as a more promising direction than "try a
-bigger model" for this specific task shape, should script generation
-ever become a priority.
+Before a model call, brokkr lowercases and tokenizes the task and entry
+descriptions, removes a small fixed set of generic words, and ranks entries by
+plain keyword overlap. At least two words and a fixed overlap threshold are
+required. There is no fuzzy, semantic, embedding, or model-assisted match.
+This lookup is only a UX suggestion: brokkr shows the best entry and its command,
+then asks the human to choose `use` or `model`. Declining follows the unchanged
+proposal pipeline. A match is never an approval and is never auto-run.
+
+Typing `brokkr library run <name>` is the other explicit use decision, analogous
+to typing an exact workflow name. In both paths, the resolved argv receives the
+current static policy check immediately before sandbox execution. Template
+entries prompt for one human value (or accept an explicit `--value`), validate it
+with the existing constraint mechanism, and never infer it from task text.
+
+A one-time seed provides ten fixed, sandbox-only entries for disk usage, large
+and recent file lookup, tar/zip archive work, TODO-line counting, PDF text
+extraction, image OCR, and Git status. Seed deletion persists; initialization
+does not silently recreate a removed entry. The seeds require neither network
+access nor host privileges and were executed against real fixture files in the
+Docker sandbox.

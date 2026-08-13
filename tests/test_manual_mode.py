@@ -64,7 +64,10 @@ def _install_propose_fakes(monkeypatch, settings, argv, answers):
     monkeypatch.setattr(
         cli,
         "ApprovalStore",
-        lambda loaded_settings: SimpleNamespace(find=lambda proposed: None),
+        lambda loaded_settings: SimpleNamespace(
+            search_library=lambda task: [],
+            find=lambda proposed: None,
+        ),
     )
     monkeypatch.setattr(
         cli,

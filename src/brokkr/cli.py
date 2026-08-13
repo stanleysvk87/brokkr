@@ -20,6 +20,8 @@ pipeline; it adds an input loop, not a second approval/execution implementation.
 `brokkr approvals ...` lists and revokes remembered commands.
 `brokkr memory ...` explicitly manages human-curated workspace context.
 `brokkr manual ...` reads results the human redirected into that workspace.
+`brokkr library ...` manages named scripts that are offered before the model
+but run only after an explicit human choice on that invocation.
 """
 
 from __future__ import annotations
@@ -38,6 +40,8 @@ from brokkr import __version__
 from brokkr.approvals.store import (
     ApprovalStore,
     ApprovalTemplate,
+    LibraryEntry,
+    LibraryValidationError,
     TemplateConstraint,
     TemplateValidationError,
     Workflow,
@@ -67,11 +71,13 @@ approvals_app = typer.Typer(help="List and revoke remembered (auto-approved) com
 memory_app = typer.Typer(help="Manage human-curated context for future proposals.")
 manual_app = typer.Typer(help="Inspect results from commands you ran manually.")
 workflow_app = typer.Typer(help="Save and explicitly run reviewed command workflows.")
+library_app = typer.Typer(help="Save, inspect, and explicitly run known-good scripts.")
 app.add_typer(sandbox_app, name="sandbox")
 app.add_typer(approvals_app, name="approvals")
 app.add_typer(memory_app, name="memory")
 app.add_typer(manual_app, name="manual")
 app.add_typer(workflow_app, name="workflow")
+app.add_typer(library_app, name="library")
 
 console = Console()
 _MANUAL_ID_LENGTH = 8
@@ -111,6 +117,79 @@ def _print_execution_output(result: SandboxExecutionResult) -> None:
     if result.stderr:
         stderr_style = "red" if result.timed_out or result.exit_code != 0 else "yellow"
         console.print(result.stderr, end="", style=stderr_style)
+
+
+def _print_library_entry(entry: LibraryEntry, command: str) -> None:
+    console.print(f"[bold]{entry.name}[/bold]")
+    console.print(entry.description, markup=False, highlight=False)
+    console.print(f"command: {command}", markup=False, highlight=False)
+
+
+def _run_library_entry(
+    entry: LibraryEntry,
+    settings: Settings,
+    approvals: ApprovalStore,
+    audit: AuditStore,
+    *,
+    variable_value: str | None = None,
+    timeout: float | None = None,
+    allow_network: bool = False,
+) -> None:
+    command_id = audit.new_command_id()
+
+    if entry.template_id is not None and variable_value is None:
+        variable_value = Prompt.ask("Value for the library template variable")
+    try:
+        approvals.validate_library_reference(entry)
+        argv = approvals.resolve_library_entry(entry, variable_value)
+    except LibraryValidationError as exc:
+        audit.record_decision(
+            command_id,
+            "blocked",
+            entry.argv,
+            reason=str(exc),
+            library_name=entry.name,
+        )
+        console.print(f"[red]library entry cannot run:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"command: {shlex.join(argv)}", markup=False, highlight=False)
+    blocked_reason = check_prohibited(argv)
+    if blocked_reason is not None:
+        audit.record_decision(
+            command_id,
+            "blocked",
+            argv,
+            reason=blocked_reason,
+            library_name=entry.name,
+        )
+        console.print(f"[red]blocked by policy:[/red] {blocked_reason}")
+        raise typer.Exit(code=1)
+
+    audit.record_decision(command_id, "library", argv, library_name=entry.name)
+    approvals.mark_library_entry_used(entry.name)
+    if entry.template_id is not None:
+        approvals.mark_template_used(entry.template_id)
+
+    sandbox = DockerSandbox(settings)
+    try:
+        result = sandbox.exec(argv, timeout=timeout, network=allow_network)
+    except SandboxError as exc:
+        console.print(f"[red]sandbox error:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    audit.record_execution(
+        command_id,
+        result,
+        source="library",
+        library_name=entry.name,
+    )
+    _print_execution_output(result)
+    status = "timed out" if result.timed_out else f"exit {result.exit_code}"
+    console.print(
+        f"\n[dim]-- {status}, {result.duration_ms:.0f}ms, command_id={command_id}[/dim]"
+    )
+    raise typer.Exit(code=124 if result.timed_out else result.exit_code)
 
 
 def _print_doctor_check(check: DoctorCheck) -> None:
@@ -422,8 +501,32 @@ def _run_proposal(
     approvals = services.approvals
     memory = services.memory
     client = services.client
-    command_id = audit.new_command_id()
 
+    for match in approvals.search_library(task):
+        entry = match.entry
+        try:
+            command = approvals.format_library_command(entry)
+        except LibraryValidationError:
+            continue
+        console.print("[bold]Library match found before asking the model:[/bold]")
+        _print_library_entry(entry, command)
+        choice = Prompt.ask(
+            "Use this library entry or continue to the model?",
+            choices=["use", "model"],
+            default="model",
+        )
+        if choice == "use":
+            _run_library_entry(
+                entry,
+                settings,
+                approvals,
+                audit,
+                timeout=timeout,
+                allow_network=allow_network,
+            )
+        break
+
+    command_id = audit.new_command_id()
     notes = memory.recent(settings.memory_max_notes)
     result = client.propose(task, model=model, notes=[entry.note for entry in notes])
     audit.record_proposal(command_id, result)
@@ -726,6 +829,153 @@ def _print_workflow(workflow: Workflow) -> None:
             markup=False,
             highlight=False,
         )
+
+
+@library_app.command("save")
+def library_save(
+    name: str = typer.Argument(..., help="Unique human-chosen library entry name."),
+    description: str = typer.Option(
+        ...,
+        "--description",
+        help="Human-written task description used for keyword matching.",
+    ),
+    from_last_approved: bool = typer.Option(
+        False,
+        "--from-last-approved",
+        help="Capture the most recent human-approved proposal execution.",
+    ),
+    command_text: str | None = typer.Option(
+        None,
+        "--command",
+        help="Directly author a shell-quoted command string.",
+    ),
+    template_id: str | None = typer.Option(
+        None,
+        "--template",
+        help="Use an existing exactly-one-variable approval template.",
+    ),
+) -> None:
+    """Saves one explicitly authored or previously reviewed command."""
+    if from_last_approved == (command_text is not None):
+        console.print(
+            "[red]library not saved: choose exactly one of "
+            "--from-last-approved or --command[/red]"
+        )
+        raise typer.Exit(code=1)
+
+    settings = _load_settings()
+    approvals = ApprovalStore(settings)
+    if from_last_approved:
+        captured = AuditStore(settings).last_reviewed_commands(1)
+        if not captured:
+            console.print("[yellow]no human-approved proposal execution is available[/yellow]")
+            raise typer.Exit(code=1)
+        argv = captured[0].argv
+    else:
+        assert command_text is not None
+        try:
+            argv = shlex.split(command_text)
+        except ValueError as exc:
+            console.print(f"[red]library not saved: command could not be parsed:[/red] {exc}")
+            raise typer.Exit(code=1) from exc
+
+    blocked_reason = check_prohibited(argv)
+    if blocked_reason is not None:
+        console.print(f"[red]library not saved, blocked by policy:[/red] {blocked_reason}")
+        raise typer.Exit(code=1)
+
+    try:
+        entry = approvals.create_library_entry(
+            name,
+            description,
+            argv,
+            template_id=template_id,
+        )
+        command = approvals.format_library_command(entry)
+    except LibraryValidationError as exc:
+        console.print(f"[red]library not saved:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    console.print(f"[green]saved library entry {entry.name}[/green]")
+    console.print(f"command: {command}", markup=False, highlight=False)
+
+
+@library_app.command("list")
+def library_list() -> None:
+    """Lists the local script library."""
+    entries = ApprovalStore(_load_settings()).list_library_entries()
+    if not entries:
+        console.print("[yellow]script library is empty[/yellow]")
+        return
+    table = Table("name", "description", "used", "created")
+    for entry in entries:
+        table.add_row(
+            entry.name,
+            entry.description,
+            str(entry.use_count),
+            entry.created_at,
+        )
+    console.print(table)
+
+
+@library_app.command("show")
+def library_show(name: str = typer.Argument(...)) -> None:
+    """Shows one library entry without running it."""
+    approvals = ApprovalStore(_load_settings())
+    entry = approvals.get_library_entry(name)
+    if entry is None:
+        console.print(f"[yellow]no library entry named {name}[/yellow]")
+        raise typer.Exit(code=1)
+    try:
+        command = approvals.format_library_command(entry)
+    except LibraryValidationError as exc:
+        console.print(f"[red]library entry cannot be shown:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    _print_library_entry(entry, command)
+    console.print(f"used: {entry.use_count}")
+    console.print(f"created: {entry.created_at}")
+    if entry.last_used_at is not None:
+        console.print(f"last used: {entry.last_used_at}")
+
+
+@library_app.command("delete")
+def library_delete(name: str = typer.Argument(...)) -> None:
+    """Deletes a library entry without changing approvals or templates."""
+    if ApprovalStore(_load_settings()).delete_library_entry(name):
+        console.print(f"[green]deleted library entry {name}[/green]")
+    else:
+        console.print(f"[yellow]no library entry named {name}[/yellow]")
+        raise typer.Exit(code=1)
+
+
+@library_app.command("run")
+def library_run(
+    name: str = typer.Argument(...),
+    value: str | None = typer.Option(
+        None,
+        "--value",
+        help="Human-supplied value for an entry's single template variable.",
+    ),
+    timeout: float | None = typer.Option(
+        None,
+        "--timeout",
+        help="Override the configured per-command timeout.",
+    ),
+) -> None:
+    """Explicitly runs a named library entry without asking the model."""
+    settings = _load_settings()
+    approvals = ApprovalStore(settings)
+    entry = approvals.get_library_entry(name)
+    if entry is None:
+        console.print(f"[yellow]no library entry named {name}[/yellow]")
+        raise typer.Exit(code=1)
+    _run_library_entry(
+        entry,
+        settings,
+        approvals,
+        AuditStore(settings),
+        variable_value=value,
+        timeout=timeout,
+    )
 
 
 @workflow_app.command("save")

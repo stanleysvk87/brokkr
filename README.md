@@ -25,7 +25,9 @@ human confirmation, the policy blocklist, exact-match remembered approvals,
 optional human-authored approval templates, and explicit human-curated memory
 all work end-to-end and are covered by tests. Bare `brokkr` starts an interactive
 mode that routes each typed line through the same pipeline as `propose`, with no
-shell quoting involved. Named workflows can replay a
+shell quoting involved. Before a model call, a local human-curated script library
+can suggest a keyword-matched known-good command, but the human must explicitly
+choose it every time. Named workflows can replay a
 human-reviewed sequence only when the human explicitly runs it. Individual commands can opt in to
 temporary network access while the sandbox remains isolated by default. Template
 matching remains off by default. Manual/advisory handling covers commands that
@@ -132,6 +134,19 @@ brokkr workflow delete backup-check
 # trimmed stdout of the previous step, after the template constraint validates it.
 brokkr workflow save inspect-found --steps 2 --from-previous 2=tpl_abcd1234
 
+# The first run includes tested sandbox-safe scripts. Run a known entry by name,
+# or type a matching task and choose whether to use it before the model is called.
+brokkr library list
+brokkr library show extract-pdf-text
+brokkr library run workspace-disk-usage
+brokkr propose "extract readable text from the PDF document"
+
+# Save an existing script or the last human-approved proposal explicitly.
+brokkr library save list-json --description "List JSON files" \
+  --command "find /workspace -type f -name '*.json' -print"
+brokkr library save reviewed-check --description "Run the reviewed workspace check" \
+  --from-last-approved
+
 # Add explicit workspace context for future proposals, then inspect it.
 brokkr memory add "This workspace uses Python 3.12"
 brokkr memory list
@@ -179,6 +194,8 @@ completions, stdout/stderr), and `logs/audit.jsonl` (a flat summary for
 `tail -f`). Execution records include whether that specific command had network
 access. Read-only inspection commands and changes to curated approval/memory
 stores are not part of this execution audit trail.
+Library executions are recorded with a distinct `library` decision and source;
+library save/list/show/delete operations only change or inspect curated state.
 
 ## Configuration
 
