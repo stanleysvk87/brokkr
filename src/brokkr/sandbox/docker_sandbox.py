@@ -18,7 +18,7 @@ this module is designed never to have.
 
 Two independent enforcement layers, deliberately not one:
   1. The Docker-level boundary (this module): a single scoped bind mount,
-     --network none by default, resource limits, dropped capabilities,
+     an internal-only Docker network by default, resource limits, dropped capabilities,
      no-new-privileges, a non-root container user, and no Docker socket
      passthrough. This is what actually stops a catastrophic command from
      doing real damage.
@@ -40,6 +40,12 @@ much less robust mechanism than the same job done by a purpose-built
 binary already running in the right namespace. The Docker client's own
 HTTP timeout is set generously past the command timeout purely as a
 backstop for a hung daemon/socket, not as the primary timeout mechanism.
+
+Network access can be granted to one exec explicitly. Since Docker networks
+attach to containers rather than exec processes, all ordinary execs take a
+shared lock while a temporary-network exec takes the exclusive form, attaches
+the bridge, runs, and detaches it in `finally`. This prevents another process's
+ordinary exec from inheriting that temporary attachment.
 """
 
 from __future__ import annotations
@@ -84,6 +90,7 @@ class SandboxExecutionResult:
     duration_ms: float
     container_id: str
     image_id: str
+    network_enabled: bool = False
 
 
 def _truncate(data: bytes, limit: int) -> tuple[str, bool]:
@@ -123,6 +130,62 @@ class DockerSandbox:
             return self._client.containers.get(self._settings.sandbox.container_name)
         except NotFound:
             return None
+
+    @property
+    def _isolated_network_name(self) -> str:
+        return f"{self._settings.sandbox.container_name}-internal"
+
+    def _ensure_isolated_network(self):
+        try:
+            network = self._client.networks.get(self._isolated_network_name)
+        except NotFound:
+            try:
+                network = self._client.networks.create(
+                    self._isolated_network_name,
+                    driver="bridge",
+                    internal=True,
+                    check_duplicate=True,
+                    labels={"org.brokkr.network": "isolated"},
+                )
+            except APIError as exc:
+                raise SandboxError(f"failed to create isolated sandbox network: {exc}") from exc
+        except APIError as exc:
+            raise SandboxError(f"failed to inspect isolated sandbox network: {exc}") from exc
+
+        try:
+            network.reload()
+        except APIError as exc:
+            raise SandboxError(f"failed to refresh isolated sandbox network: {exc}") from exc
+        labels = network.attrs.get("Labels") or {}
+        if (
+            network.attrs.get("Internal") is not True
+            or network.attrs.get("Driver") != "bridge"
+            or labels.get("org.brokkr.network") != "isolated"
+        ):
+            raise SandboxError(
+                f"Docker network {self._isolated_network_name!r} exists but is not "
+                "brokkr's internal-only network"
+            )
+        return network
+
+    def _migrate_legacy_none_network(self, container: Container) -> None:
+        """Moves a pre-feature network_mode=none container without resetting it."""
+        networks = container.attrs.get("NetworkSettings", {}).get("Networks", {})
+        isolated = self._ensure_isolated_network()
+        if self._isolated_network_name in networks:
+            return
+        if "none" not in networks:
+            raise SandboxError(
+                "sandbox has an unexpected network attachment; reset it before reuse"
+            )
+
+        try:
+            none_network = self._client.networks.get("none")
+            none_network.disconnect(container)
+            isolated.connect(container)
+        except APIError as exc:
+            raise SandboxError(f"failed to migrate sandbox to isolated network: {exc}") from exc
+        container.reload()
 
     def existing_container(self) -> Container | None:
         """Returns the sandbox container if one exists, without creating
@@ -173,6 +236,19 @@ class DockerSandbox:
             finally:
                 fcntl.flock(handle, fcntl.LOCK_UN)
 
+    @contextmanager
+    def _network_lock(self, *, exclusive: bool) -> Iterator[None]:
+        """Prevents ordinary execs from overlapping a temporary attachment."""
+        path = self._settings.sandbox_network_lock_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as handle:
+            operation = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+            fcntl.flock(handle, operation)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
     def ensure_running(self) -> Container:
         """Returns the long-lived sandbox container, starting or creating
         it if necessary. Auto-resets it first if it's been idle past
@@ -195,10 +271,18 @@ class DockerSandbox:
             container.reload()
             if container.status != "running":
                 container.start()
+                container.reload()
+            if self._settings.sandbox.network == "none":
+                self._migrate_legacy_none_network(container)
             return container
 
         self.build_image()
         sandbox = self._settings.sandbox
+        network_mode = (
+            self._ensure_isolated_network().name
+            if sandbox.network == "none"
+            else sandbox.network
+        )
         self._touch_last_used()
         try:
             return self._client.containers.run(
@@ -210,7 +294,7 @@ class DockerSandbox:
                 # when they later finish, preventing zombie accumulation in
                 # this intentionally long-lived container.
                 init=True,
-                network_mode=sandbox.network,
+                network_mode=network_mode,
                 mem_limit=sandbox.memory_limit,
                 nano_cpus=int(sandbox.cpu_limit * 1_000_000_000),
                 pids_limit=sandbox.pids_limit,
@@ -270,7 +354,12 @@ class DockerSandbox:
         container.stop(timeout=5)
         container.remove(force=True)
 
-    def exec(self, argv: list[str], timeout: float | None = None) -> SandboxExecutionResult:
+    def exec(
+        self,
+        argv: list[str],
+        timeout: float | None = None,
+        network: bool = False,
+    ) -> SandboxExecutionResult:
         """Runs argv inside the sandbox container. argv is passed straight
         through to Docker's exec API as a list -- never joined into a
         shell string, never interpreted by a shell inside the container
@@ -282,6 +371,8 @@ class DockerSandbox:
         sandbox = self._settings.sandbox
         effective_timeout = timeout if timeout is not None else sandbox.command_timeout_seconds
         container = self.ensure_running()
+        temporary_network = network and sandbox.network == "none"
+        network_enabled = temporary_network or sandbox.network != "none"
 
         wrapped = [
             "timeout",
@@ -292,14 +383,35 @@ class DockerSandbox:
         ]
 
         started = time.monotonic()
-        try:
-            exit_code, (stdout_bytes, stderr_bytes) = container.exec_run(
-                wrapped,
-                workdir=sandbox.workdir_container,
-                demux=True,
-            )
-        except APIError as exc:
-            raise SandboxError(f"docker exec failed: {exc}") from exc
+        with self._network_lock(exclusive=temporary_network):
+            bridge = None
+            attached = False
+            try:
+                if temporary_network:
+                    try:
+                        bridge = self._client.networks.get("bridge")
+                        bridge.connect(container)
+                        attached = True
+                    except APIError as exc:
+                        raise SandboxError(f"failed to enable network for sandbox exec: {exc}") from exc
+
+                try:
+                    exit_code, (stdout_bytes, stderr_bytes) = container.exec_run(
+                        wrapped,
+                        workdir=sandbox.workdir_container,
+                        demux=True,
+                    )
+                except APIError as exc:
+                    raise SandboxError(f"docker exec failed: {exc}") from exc
+            finally:
+                if attached:
+                    assert bridge is not None
+                    try:
+                        bridge.disconnect(container)
+                    except APIError as exc:
+                        raise SandboxError(
+                            f"failed to disable network after sandbox exec: {exc}"
+                        ) from exc
         duration_ms = (time.monotonic() - started) * 1000
         self._touch_last_used_if_current(container.id)
 
@@ -316,4 +428,5 @@ class DockerSandbox:
             duration_ms=duration_ms,
             container_id=container.id,
             image_id=container.image.id,
+            network_enabled=network_enabled,
         )

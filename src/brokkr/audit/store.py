@@ -6,7 +6,8 @@ and from Stage 2 on, full model prompts/completions -- so a pure
 append-only JSONL log would be unpleasant to query. Instead:
 
   - logs/audit.db     structured, indexed columns for querying
-                       ("show me every non-zero exit today").
+                       ("show me every non-zero exit today" or every
+                       execution that had network access).
   - logs/blobs/<command_id>/<event>.json   the full raw payload for that
                        event, one file per event, independently
                        readable/deletable/greppable.
@@ -74,7 +75,8 @@ CREATE TABLE IF NOT EXISTS commands (
     truncated INTEGER NOT NULL,
     duration_ms REAL NOT NULL,
     container_id TEXT NOT NULL,
-    image_id TEXT NOT NULL
+    image_id TEXT NOT NULL,
+    network_enabled INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_commands_created_at ON commands (created_at);
@@ -99,6 +101,17 @@ class AuditStore:
         self._blobs_dir.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(commands)")}
+            if "network_enabled" not in columns:
+                try:
+                    conn.execute(
+                        "ALTER TABLE commands ADD COLUMN "
+                        "network_enabled INTEGER NOT NULL DEFAULT 0"
+                    )
+                except sqlite3.OperationalError:
+                    columns = {row[1] for row in conn.execute("PRAGMA table_info(commands)")}
+                    if "network_enabled" not in columns:
+                        raise
 
     @staticmethod
     def new_command_id() -> str:
@@ -137,6 +150,7 @@ class AuditStore:
             "error": result.error,
             "reasoning": proposal.reasoning if proposal else None,
             "argv": proposal.argv if proposal else None,
+            "needs_network": proposal.needs_network if proposal else None,
         }
         self._write_blob(command_id, "proposal", blob)
 
@@ -167,6 +181,7 @@ class AuditStore:
                 "event": "proposal",
                 "task_description": result.task_description,
                 "argv": proposal.argv if proposal else None,
+                "needs_network": proposal.needs_network if proposal else None,
                 "error": result.error,
             }
         )
@@ -250,8 +265,8 @@ class AuditStore:
                 INSERT INTO commands (
                     command_id, created_at, source, argv_json,
                     exit_code, timed_out, truncated, duration_ms,
-                    container_id, image_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    container_id, image_id, network_enabled
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     command_id,
@@ -264,6 +279,7 @@ class AuditStore:
                     result.duration_ms,
                     result.container_id,
                     result.image_id,
+                    int(result.network_enabled),
                 ),
             )
 
@@ -276,6 +292,7 @@ class AuditStore:
                 "command": result.command,
                 "exit_code": result.exit_code,
                 "timed_out": result.timed_out,
+                "network_enabled": result.network_enabled,
                 "duration_ms": round(result.duration_ms, 1),
             }
         )

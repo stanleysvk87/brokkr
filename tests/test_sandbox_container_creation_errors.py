@@ -34,7 +34,19 @@ def test_container_creation_api_error_becomes_sandbox_error(sandbox, monkeypatch
 
     monkeypatch.setattr(sandbox, "_get_container", lambda: None)
     monkeypatch.setattr(sandbox, "build_image", lambda: "image-id")
-    sandbox._client = SimpleNamespace(containers=SimpleNamespace(run=_raise_api_error))
+    isolated = SimpleNamespace(
+        name="brokkr-sandbox-internal",
+        reload=lambda: None,
+        attrs={
+            "Internal": True,
+            "Driver": "bridge",
+            "Labels": {"org.brokkr.network": "isolated"},
+        },
+    )
+    sandbox._client = SimpleNamespace(
+        containers=SimpleNamespace(run=_raise_api_error),
+        networks=SimpleNamespace(get=lambda name: isolated),
+    )
 
     with pytest.raises(SandboxError, match="failed to create sandbox container"):
         sandbox.ensure_running()
@@ -50,7 +62,20 @@ def test_container_creation_enables_init_reaper(sandbox, monkeypatch):
 
     monkeypatch.setattr(sandbox, "_get_container", lambda: None)
     monkeypatch.setattr(sandbox, "build_image", lambda: "image-id")
-    sandbox._client = SimpleNamespace(containers=SimpleNamespace(run=_run))
+    isolated = SimpleNamespace(
+        name="brokkr-sandbox-internal",
+        reload=lambda: None,
+        attrs={
+            "Internal": True,
+            "Driver": "bridge",
+            "Labels": {"org.brokkr.network": "isolated"},
+        },
+    )
+    sandbox._client = SimpleNamespace(
+        containers=SimpleNamespace(run=_run),
+        networks=SimpleNamespace(get=lambda name: isolated),
+    )
 
     assert sandbox.ensure_running() is container
     assert captured["init"] is True
+    assert captured["network_mode"] == "brokkr-sandbox-internal"

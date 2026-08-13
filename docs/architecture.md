@@ -10,7 +10,7 @@ task description
       |
       v
   [1] LLM proposal          brokkr/llm/client.py
-      |  (structured output: {reasoning, argv})
+      |  (structured output: {reasoning, argv, needs_network?})
       v
   [2] human decision         brokkr/cli.py (propose command)
       |  approve / edit / reject / manual
@@ -26,6 +26,7 @@ task description
       |
       v
   [5] approved execution     brokkr/sandbox/docker_sandbox.py
+      |  optional human-typed --allow-network for this invocation only
 ```
 
 Steps [1]–[4] never execute the proposed command. An approved command reaches
@@ -38,7 +39,8 @@ Each gate catches a different failure mode, and they're deliberately not
 merged into one "is this safe" check:
 
 - **The LLM proposal** can be wrong, but it can't do anything by itself —
-  it only ever produces a JSON object.
+  it only ever produces a JSON object. Its optional `needs_network` judgment
+  changes the pre-review display, never the sandbox network state.
 - **Human review** catches the cases a human would obviously reject on
   sight, and is the only gate with actual judgment. It can also route a
   command to manual handling without granting brokkr any new capability.
@@ -64,7 +66,8 @@ model is even called:
   failed to produce).
 - `decisions` — what actually happened to the proposal: approved,
   edited, rejected, manual, auto-approved from memory, or blocked by policy.
-- `commands` — what the sandbox actually ran, if anything did.
+- `commands` — what the sandbox actually ran, if anything did, including
+  whether that specific execution had network access.
 
 A `command_id` with a `decisions` row but no matching `commands` row is
 expected, not a corrupted record — it means the pipeline stopped before
@@ -126,6 +129,29 @@ reset` stops and removes the container entirely, and the next command
 recreates it from the image, fresh. Nothing about the container's
 internal state silently persists in a way that isn't either (a) still
 there because nobody reset it, or (b) gone because someone did.
+
+### Per-command network access
+
+The configured default remains `none`, represented at runtime by a dedicated
+Docker `internal` network with no external route. Docker's special literal
+`network_mode=none` cannot accept a temporary second network at all; existing
+containers using that legacy mode are moved in place to the internal network
+without resetting their rootfs. Network attachment still belongs to a
+container rather than an individual exec.
+When the human types `--allow-network`, `DockerSandbox.exec()` exclusively
+locks the network transition, attaches the existing container to the bridge,
+runs the one command, and detaches in `finally`. Ordinary no-network execs use
+a shared form of the same lock: they can still overlap one another, but cannot
+start inside another process's temporary network window. A container created
+with the operator's persistent `BROKKR_SANDBOX_NETWORK=bridge` setting skips
+this attach/detach dance and is never disconnected by per-command cleanup.
+
+The model may return `needs_network: true`; this produces a visible warning so
+the human can rerun with the flag if they choose. The value is not passed to
+the sandbox and cannot grant access. Exact/template auto-approval also does not
+remember network permission: each network-enabled invocation still requires
+the human to type `--allow-network`. The `commands.network_enabled` audit
+column records actual access for the execution rather than the model's request.
 
 ## Approval matching: exact by default, explicitly constrained templates by opt-in
 

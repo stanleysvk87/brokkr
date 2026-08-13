@@ -45,6 +45,20 @@ def test_propose_returns_proposal_on_valid_response(monkeypatch, settings):
     assert result.error is None
     assert result.proposal is not None
     assert result.proposal.argv == ["ls", "-la"]
+    assert result.proposal.needs_network is False
+
+
+def test_propose_parses_optional_needs_network_flag(monkeypatch, settings):
+    valid_content = json.dumps(
+        {"reasoning": "fetch it", "argv": ["curl", "https://example.com"], "needs_network": True}
+    )
+    monkeypatch.setattr(httpx, "post", lambda *a, **kw: _fake_response(valid_content))
+
+    result = OllamaClient(settings).propose("check a URL")
+
+    assert result.error is None
+    assert result.proposal is not None
+    assert result.proposal.needs_network is True
 
 
 @pytest.mark.parametrize("notes", [None, []])

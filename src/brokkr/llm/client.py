@@ -47,6 +47,7 @@ _PROPOSAL_JSON_SCHEMA = {
     "properties": {
         "reasoning": {"type": "string"},
         "argv": {"type": "array", "items": {"type": "string"}},
+        "needs_network": {"type": "boolean"},
     },
     "required": ["reasoning", "argv"],
 }
@@ -54,7 +55,7 @@ _PROPOSAL_JSON_SCHEMA = {
 _SYSTEM_PROMPT = (
     "You propose exactly one shell command, as a list of argv strings, to "
     "accomplish the user's task. The command will run inside an isolated "
-    "Docker sandbox with no network access and only a /workspace directory "
+    "Docker sandbox with no network access by default and only a /workspace directory "
     "visible. A human reviews every proposal before it runs, and may edit "
     "or reject it. Propose the most direct, minimal command for the task. "
     "Never propose a shell pipeline joined by ;, &&, or | as a single argv "
@@ -69,6 +70,8 @@ _SYSTEM_PROMPT = (
     "task refers to a file this way and its exact path is not stated in the "
     "current task or human-provided context, propose only ls or find to discover "
     "it; do not propose rm, mv, or another mutation with a guessed path. "
+    "Set needs_network to true only when the proposed command requires network "
+    "access. This is informational for the human and does not grant access. "
     "Respond only with the JSON object described by the schema."
 )
 
@@ -84,6 +87,7 @@ _BARE_SHELL_OPERATOR_TOKENS = frozenset({"|", "||", "&&", ";", ">", ">>", "<", "
 class _ProposalSchema(BaseModel):
     reasoning: str
     argv: list[str]
+    needs_network: bool = False
 
     @field_validator("argv")
     @classmethod
@@ -110,6 +114,7 @@ class _ProposalSchema(BaseModel):
 class CommandProposal:
     reasoning: str
     argv: list[str]
+    needs_network: bool = False
 
 
 @dataclass
@@ -224,5 +229,9 @@ class OllamaClient:
             model=effective_model,
             raw_content=raw_content,
             latency_ms=latency_ms,
-            proposal=CommandProposal(reasoning=validated.reasoning, argv=validated.argv),
+            proposal=CommandProposal(
+                reasoning=validated.reasoning,
+                argv=validated.argv,
+                needs_network=validated.needs_network,
+            ),
         )

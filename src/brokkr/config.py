@@ -73,6 +73,10 @@ class Settings(BaseModel):
     def sandbox_lock_path(self) -> Path:
         return self.data_dir / "sandbox.lock"
 
+    @property
+    def sandbox_network_lock_path(self) -> Path:
+        return self.data_dir / "sandbox_network.lock"
+
 
 def _resolve_dir(value: str) -> Path:
     path = Path(value).expanduser()

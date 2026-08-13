@@ -96,7 +96,7 @@ def test_matching_template_skips_prompt_and_has_distinct_audit_decision(monkeypa
         def __init__(self, loaded_settings):
             assert loaded_settings is settings
 
-        def exec(self, command, timeout=None):
+        def exec(self, command, timeout=None, network=False):
             return SandboxExecutionResult(
                 command=command,
                 exit_code=0,
@@ -137,7 +137,7 @@ def test_exact_match_keeps_priority_and_auto_approved_audit_value(monkeypatch, s
         def __init__(self, loaded_settings):
             assert loaded_settings is settings
 
-        def exec(self, command, timeout=None):
+        def exec(self, command, timeout=None, network=False):
             return SandboxExecutionResult(
                 command=command,
                 exit_code=0,

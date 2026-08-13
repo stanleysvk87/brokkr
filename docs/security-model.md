@@ -15,9 +15,16 @@ substitute for it. This was verified manually, not just asserted; see
    not `/`, and specifically not the Docker socket — mounting that in
    would let a command inside the sandbox control Docker on the host,
    which is a complete escape. brokkr never does this.
-2. **No network by default.** `--network none` unless explicitly
-   overridden. A command that tries to exfiltrate data or download
-   something has nowhere to send or fetch it.
+2. **No network by default.** The default `BROKKR_SANDBOX_NETWORK=none`
+   is implemented with a dedicated Docker `internal` network: it has no
+   external route but, unlike Docker's special `network_mode=none`, can accept
+   a second temporary attachment. A human can type
+   `--allow-network` on one `propose` or `sandbox exec` invocation; brokkr
+   then attaches Docker's bridge only around that execution and detaches it
+   in a `finally` block after success, failure, or timeout. The model's
+   optional `needs_network` field only adds a warning before review and never
+   grants access. Without the CLI flag or a deliberate persistent `bridge`
+   configuration, a command has nowhere to send or fetch data.
 3. **Enforced resource limits.** CPU, memory, and PID limits are always
    applied (`BROKKR_SANDBOX_*_LIMIT` in `.env.example`) — the PID limit
    in particular is a second, independent layer against fork bombs, on
@@ -33,7 +40,8 @@ inside the sandbox can, at worst, destroy the contents of
 `~/brokkr-workspace` (or whatever `BROKKR_SANDBOX_WORKDIR_HOST` points
 at) — because that's real, writable storage, not a decoy — and consume
 resources up to the configured limits. It cannot read or modify anything
-else on the host, cannot reach the network, and cannot escalate
+else on the host, cannot reach the network unless the human explicitly grants
+it for that invocation (or configured persistent access), and cannot escalate
 privileges inside the container.
 
 ## What was actually tested
@@ -75,6 +83,15 @@ development (see CHANGELOG.md's Stage 1 entry for the full detail):
   container or host `/etc`.
 - **A network request to an external host with `--network none`.**
   Confirmed it failed to connect, not just failed slowly.
+- **A per-command network grant.** Docker rejects attaching bridge directly
+  to a container in its special `network_mode=none`, which the initial
+  implementation discovered live. The default was therefore represented by
+  a dedicated `internal` network instead; curl still failed there without an
+  external route. A `--allow-network` curl then succeeded, the execution audit row
+  recorded network access, and host-side Docker network inspection immediately
+  afterward showed the sandbox detached from the bridge. Repeating without the
+  flag failed to connect. Automated tests force both a Docker exec exception
+  and a timeout and confirm bridge disconnection still occurs.
 - **A root-only package installation as the sandbox user.** `apt-get
   install` exited 100 immediately with an explicit permission-denied
   error for the dpkg frontend lock and asked whether the caller was root.
@@ -202,6 +219,9 @@ issue.
 - **Resource exhaustion from a legitimately-approved command.** The
   resource limits stop runaway/accidental exhaustion; they don't stop a
   human from approving something that's simply expensive to run.
+- **Exfiltration during explicitly granted network access.** Temporary bridge
+  access is full outbound access, not a domain allowlist. It narrows the time
+  window but does not make an approved network-enabled command trustworthy.
 
 ## Defense-in-depth layers, and why they exist despite not being the real boundary
 

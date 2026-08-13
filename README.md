@@ -23,8 +23,9 @@ decided, and what actually ran.
 Stages 0–5 of the build are done: the sandbox mechanism, LLM proposals,
 human confirmation, the policy blocklist, exact-match remembered approvals,
 optional human-authored approval templates, and explicit human-curated memory
-all work end-to-end and are covered by tests. Template matching remains off by
-default. See
+all work end-to-end and are covered by tests. Individual commands can opt in to
+temporary network access while the sandbox remains isolated by default. Template
+matching remains off by default. See
 [CHANGELOG.md](CHANGELOG.md) for exactly what was built and verified at
 each stage, and [docs/architecture.md](docs/architecture.md) for how the
 pieces fit together.
@@ -75,6 +76,10 @@ brokkr sandbox exec -- ls -la /workspace
 # You'll see its reasoning and the exact command before anything runs.
 brokkr propose "list every file in the workspace, including hidden ones"
 
+# Explicitly grant outbound access to this invocation only. The model may
+# report that access is needed, but only this human-typed flag enables it.
+brokkr propose "check if example.com responds to curl" --allow-network
+
 # At the confirmation prompt, choose manual for a command you need to run
 # yourself. Follow the printed redirect instructions, then inspect the result
 # with the short command ID brokkr printed.
@@ -102,6 +107,7 @@ brokkr sandbox reset
 Everything that happens is recorded in `logs/audit.db` (queryable SQLite),
 `logs/blobs/<command_id>/` (full raw payloads — prompts, completions,
 stdout/stderr), and `logs/audit.jsonl` (a flat summary for `tail -f`).
+Execution records include whether that specific command had network access.
 
 ## Configuration
 

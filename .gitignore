@@ -21,6 +21,7 @@ data/*.db-shm
 data/*.db-journal
 data/sandbox_last_used
 data/sandbox.lock
+data/sandbox_network.lock
 logs/*.db
 logs/*.db-wal
 logs/*.db-shm

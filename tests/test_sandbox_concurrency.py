@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 import time
 from types import SimpleNamespace
+from typing import ClassVar
 
 from brokkr.config import SandboxConfig, Settings
 from brokkr.sandbox.docker_sandbox import DockerSandbox
@@ -13,6 +14,9 @@ from brokkr.sandbox.docker_sandbox import DockerSandbox
 class _FakeContainer:
     id = "container-id"
     status = "running"
+    attrs: ClassVar = {
+        "NetworkSettings": {"Networks": {"brokkr-sandbox-internal": {}}}
+    }
 
     def reload(self) -> None:
         pass
@@ -47,10 +51,22 @@ def test_concurrent_first_use_creates_named_container_once(tmp_path, monkeypatch
             created = _FakeContainer()
             return created
 
+    isolated = SimpleNamespace(
+        name="brokkr-sandbox-internal",
+        reload=lambda: None,
+        attrs={
+            "Internal": True,
+            "Driver": "bridge",
+            "Labels": {"org.brokkr.network": "isolated"},
+        },
+    )
     for sandbox in sandboxes:
         monkeypatch.setattr(sandbox, "_get_container", get_container)
         monkeypatch.setattr(sandbox, "build_image", lambda: "image-id")
-        sandbox._client = SimpleNamespace(containers=SimpleNamespace(run=run))
+        sandbox._client = SimpleNamespace(
+            containers=SimpleNamespace(run=run),
+            networks=SimpleNamespace(get=lambda name: isolated),
+        )
 
     results = []
 

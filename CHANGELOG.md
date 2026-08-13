@@ -611,3 +611,37 @@ regex full matching, invalid/origin-mismatched template rejection, argv shape
 matching, exact-match priority, default-off behavior, audit distinction,
 policy blocking before execution, human-only wizard input, listing, usage
 tracking, and revocation.
+
+## Per-command network opt-in — 2026-08-13
+
+Added `--allow-network` to `brokkr propose` and direct `brokkr sandbox exec`.
+With the default persistent setting still `none`, this human-typed flag
+attaches the long-lived sandbox to Docker's bridge only around that execution
+and disconnects it in `finally`, including after timeout or Docker exec errors.
+Ordinary executions take a shared network lock while temporary-network work
+takes it exclusively, so a concurrent no-network command cannot accidentally
+inherit another invocation's attachment. An operator-configured persistent
+bridge is detected and never disconnected by this path.
+
+**Mechanism correction found during live verification**: Docker refuses to
+connect a container in its special `network_mode=none` to a second network, so
+the straightforward attach attempt failed cleanly with HTTP 400. The shipped
+configuration still says `none` and retains no external route, but its runtime
+representation is now a dedicated Docker `internal` network, which permits the
+temporary bridge attachment. Existing legacy `none` containers migrate to it
+in place without losing rootfs state. Direct testing proved curl fails on the
+internal network, succeeds while bridge is attached, and fails again after
+bridge is removed.
+
+The structured proposal may now include optional `needs_network: true`, which
+is displayed clearly before review but remains informational: it is never used
+as the value passed to the sandbox. Every network grant still comes from the
+separate CLI flag on that invocation, including for exact or template
+auto-approvals. Audit command rows, blobs, and JSONL execution records now
+state whether the actual execution had network access; existing databases are
+migrated with a false default for historical rows.
+
+Regression tests cover attach/exec/detach ordering, the untouched default
+path, exception and timeout cleanup, persistent bridge behavior, concurrent
+isolation, both CLI entry points, model-flag-without-grant behavior, optional
+schema compatibility, audit values, and migration of an existing audit DB.

@@ -192,6 +192,11 @@ def sandbox_exec(
     timeout: float | None = typer.Option(
         None, "--timeout", help="Override the configured per-command timeout (seconds)."
     ),
+    allow_network: bool = typer.Option(
+        False,
+        "--allow-network",
+        help="Temporarily attach network access for this execution only.",
+    ),
 ) -> None:
     """Runs a command directly inside the sandbox container. No LLM, no
     approval flow -- you're typing the exact command yourself. Every run
@@ -201,8 +206,10 @@ def sandbox_exec(
     audit = AuditStore(settings)
 
     command_id = audit.new_command_id()
+    if allow_network:
+        console.print("[yellow]network access enabled for this execution[/yellow]")
     try:
-        result = sandbox.exec(argv, timeout=timeout)
+        result = sandbox.exec(argv, timeout=timeout, network=allow_network)
     except SandboxError as exc:
         console.print(f"[red]sandbox error:[/red] {exc}")
         raise typer.Exit(code=1) from exc
@@ -256,6 +263,11 @@ def propose(
     timeout: float | None = typer.Option(
         None, "--timeout", help="Override the configured per-command sandbox timeout (seconds)."
     ),
+    allow_network: bool = typer.Option(
+        False,
+        "--allow-network",
+        help="Temporarily attach network access for this execution only.",
+    ),
 ) -> None:
     """Asks the model to propose a command for TASK, shows you its
     reasoning, and lets you run it as-is, edit it, reject it, or handle it
@@ -282,6 +294,13 @@ def propose(
     assert proposal is not None  # result.error is None, so propose() guarantees this
     console.print(f"[dim]reasoning:[/dim] {proposal.reasoning}")
     console.print(f"[bold]command:[/bold] {shlex.join(proposal.argv)}")
+    if allow_network:
+        console.print("[yellow]network access enabled for this execution[/yellow]")
+    elif proposal.needs_network:
+        console.print(
+            "[yellow]the model reports this command may need network access; "
+            "rerun with --allow-network to grant it[/yellow]"
+        )
 
     remembered = approvals.find(proposal.argv)
     matched_template = None
@@ -356,7 +375,7 @@ def propose(
     # prevent it from running.
     sandbox = DockerSandbox(settings)
     try:
-        exec_result = sandbox.exec(final_argv, timeout=timeout)
+        exec_result = sandbox.exec(final_argv, timeout=timeout, network=allow_network)
     except SandboxError as exc:
         console.print(f"[red]sandbox error:[/red] {exc}")
         raise typer.Exit(code=1) from exc
