@@ -849,3 +849,20 @@ or another graphical launcher and directs page-fetching tasks to `curl` or
 `wget` text output instead. Network opt-in behavior is unchanged. Text
 regressions lock in both pieces of guidance without blocking either syntax when
 it is legitimate literal content.
+
+## GitHub Actions CI — 2026-08-13
+
+Added the project's first automated CI workflow for pushes to `master` and pull
+requests. Separate jobs run the default Python 3.10 pytest suite, Ruff, the
+project's established privacy grep, and both opt-in Docker integration modules.
+Keeping Docker tests separate preserves a fast unit-test signal while still
+exercising the real sandbox image, PDF/OCR tooling, and every seeded library
+entry on a Docker-capable hosted runner.
+
+The privacy job deliberately inverts grep's normal success semantics: a match
+fails CI. Its only exception is the exact standard CI badge line built from the
+current public GitHub repository identifier, because that public badge URL may
+itself contain a privacy-pattern substring. README now displays that workflow
+badge, and CONTRIBUTING documents both Docker-gated modules. Local validation
+can prove the YAML structure and commands, but the first real hosted-runner
+verification necessarily occurs only after a human pushes the commit.

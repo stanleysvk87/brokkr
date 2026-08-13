@@ -1,5 +1,7 @@
 # brokkr
 
+[![CI](https://github.com/stanleysvk87/brokkr/actions/workflows/ci.yml/badge.svg)](https://github.com/stanleysvk87/brokkr/actions/workflows/ci.yml)
+
 A local, tool-augmented LLM agent that can **propose** and, after human
 confirmation, **execute** shell commands inside a Docker sandbox — with
 exhaustive logging so every proposed command, every approval decision, and

@@ -26,7 +26,8 @@ does not require Docker; after changing the sandbox Dockerfile or its tool list,
 also run:
 
 ```bash
-BROKKR_RUN_DOCKER_TESTS=1 .venv/bin/pytest -q tests/test_pdf_ocr_tooling.py
+BROKKR_RUN_DOCKER_TESTS=1 .venv/bin/pytest -q \
+  tests/test_pdf_ocr_tooling.py tests/test_library_seed_integration.py
 ```
 
 If you touch `sandbox/docker_sandbox.py` or
