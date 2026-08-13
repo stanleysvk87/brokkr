@@ -110,6 +110,7 @@ class ReviewedCommand:
     command_id: str
     task_description: str
     argv: list[str]
+    exit_code: int
 
 
 @dataclass(frozen=True)
@@ -356,7 +357,7 @@ class AuditStore:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT p.command_id, p.task_description, c.argv_json
+                SELECT p.command_id, p.task_description, c.argv_json, c.exit_code
                 FROM proposals AS p
                 JOIN decisions AS d ON d.command_id = p.command_id
                 JOIN commands AS c ON c.command_id = p.command_id
@@ -367,7 +368,8 @@ class AuditStore:
                 (limit,),
             ).fetchall()
         return [
-            ReviewedCommand(row[0], row[1], json.loads(row[2])) for row in reversed(rows)
+            ReviewedCommand(row[0], row[1], json.loads(row[2]), row[3])
+            for row in reversed(rows)
         ]
 
     def list_history(

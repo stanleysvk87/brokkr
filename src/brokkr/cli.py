@@ -816,19 +816,30 @@ def _parse_previous_stdout_templates(values: list[str]) -> dict[int, str]:
     return mappings
 
 
-def _print_workflow(workflow: Workflow) -> None:
+def _print_workflow(
+    workflow: Workflow, *, original_exit_codes: list[int] | None = None
+) -> None:
     console.print(f"[bold]Workflow {workflow.name}[/bold]")
-    for step in workflow.steps:
+    for index, step in enumerate(workflow.steps):
         suffix = (
             f" [template {step.template_id}, variable from previous stdout]"
             if step.use_previous_stdout
             else ""
         )
+        exit_code = original_exit_codes[index] if original_exit_codes is not None else 0
         console.print(
             f"  {step.position}. {shlex.join(step.argv)}{suffix}",
             markup=False,
             highlight=False,
+            end="" if exit_code != 0 else "\n",
         )
+        if exit_code != 0:
+            console.print(
+                f" [original exit {exit_code}]",
+                style="bold red",
+                markup=False,
+                highlight=False,
+            )
 
 
 @library_app.command("save")
@@ -1021,7 +1032,7 @@ def workflow_save(
 
     console.print(f"[bold]Steps to save as {normalized_name}:[/bold]")
     preview = Workflow(normalized_name, prepared, "", None, 0)
-    _print_workflow(preview)
+    _print_workflow(preview, original_exit_codes=[entry.exit_code for entry in captured])
     if not Confirm.ask("Save this workflow?", default=False):
         console.print("[yellow]workflow not saved[/yellow]")
         return

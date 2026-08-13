@@ -68,6 +68,8 @@ _SYSTEM_PROMPT = (
     "genuinely required. Wrong: [\"du\", \"-sh\", \"/workspace/reports/*\"]. "
     'Right: ["find", "/workspace/reports", "-maxdepth", "1", "-type", "f", '
     '"-exec", "du", "-sh", "{}", ";"]. '
+    'For total workspace usage, no glob is needed because du already recurses. Wrong: '
+    '["du", "-sh", "/workspace/*"]. Right: ["du", "-sh", "/workspace"]. '
     "Shell command substitution is not evaluated in ordinary argv elements either. "
     "Both $(...) and backticks remain literal text unless you deliberately invoke a shell. "
     'Wrong: ["curl", "https://example.com/$(date +%Y)"]. '
@@ -97,6 +99,10 @@ _SYSTEM_PROMPT = (
     "'/workspace/reports_folder'. Search a known parent read-only instead; for example, "
     'use ["find", "/workspace", "-type", "d", "-iname", "*reports*", "-print"] '
     "to discover a directory described as 'the reports folder'. "
+    "If a task names no file, path, or discoverable target description at all, never "
+    "invent a target or propose a specific mutating command. Propose only a read-only "
+    'workspace discovery command such as ["ls", "-la", "/workspace"] to reveal what '
+    "actually exists before any mutation is considered. "
     "For a deletion preview or dry run, answer the specific question with a read-only "
     "command targeting the confirmed path, such as find <path> to list exactly what "
     "would be removed or du -sh <path> to show its size; do not substitute a generic "

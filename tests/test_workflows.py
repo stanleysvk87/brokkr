@@ -188,6 +188,48 @@ def test_workflow_save_cli_captures_recent_reviewed_steps(monkeypatch, tmp_path)
     assert [step.argv for step in workflow.steps] == [["echo", "0"], ["echo", "1"]]
 
 
+def test_workflow_save_preview_marks_original_failed_execution(monkeypatch, tmp_path):
+    settings = _settings(tmp_path)
+    AuditStore(settings)
+    with sqlite3.connect(settings.audit_db_path) as conn:
+        for index, exit_code in enumerate([1, 0]):
+            command_id = f"preview-{index}"
+            created = f"2026-08-13T11:30:0{index}+00:00"
+            argv = ["echo", str(index)]
+            conn.execute(
+                "INSERT INTO proposals VALUES (?, ?, ?, 'model', 'reason', ?, 1, NULL)",
+                (command_id, created, f"task {index}", json.dumps(argv)),
+            )
+            conn.execute(
+                """
+                INSERT INTO decisions (
+                    command_id, created_at, decision, final_argv_json, reason
+                ) VALUES (?, ?, 'approved', ?, NULL)
+                """,
+                (command_id, created, json.dumps(argv)),
+            )
+            conn.execute(
+                """
+                INSERT INTO commands (
+                    command_id, created_at, source, argv_json, exit_code,
+                    timed_out, truncated, duration_ms, container_id, image_id
+                ) VALUES (?, ?, 'llm_approved', ?, ?, 0, 0, 1, 'c', 'i')
+                """,
+                (command_id, created, json.dumps(argv), exit_code),
+            )
+    monkeypatch.setattr(cli, "load_settings", lambda: settings)
+    monkeypatch.setattr(cli.Confirm, "ask", staticmethod(lambda *args, **kwargs: False))
+
+    result = CliRunner().invoke(
+        cli.app, ["workflow", "save", "preview", "--steps", "2"]
+    )
+
+    assert result.exit_code == 0
+    assert "1. echo 0 [original exit 1]" in result.output
+    assert "2. echo 1 [original exit" not in result.output
+    assert ApprovalStore(settings).get_workflow("preview") is None
+
+
 def test_workflow_run_executes_in_order_and_audits_shared_run_id(monkeypatch, tmp_path):
     settings = _settings(tmp_path)
     store = ApprovalStore(settings)

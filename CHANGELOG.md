@@ -866,3 +866,26 @@ itself contain a privacy-pattern substring. README now displays that workflow
 badge, and CONTRIBUTING documents both Docker-gated modules. Local validation
 can prove the YAML structure and commands, but the first real hosted-runner
 verification necessarily occurs only after a human pushes the commit.
+
+## Round 33 dogfooding fixes — 2026-08-13
+
+Three focused usability gaps found during real Ollama and Docker dogfooding now
+have proportionate fixes. The task "Show the total disk usage of all files in
+my workspace in a human readable form" exposed another literal direct-argv
+glob: `du -sh '/workspace/*'`. The system prompt now pairs that exact wrong
+shape with `du -sh /workspace`, where `du` recursion removes the need for a
+glob. This remains model guidance rather than a validator or policy rule.
+
+Workflow-save previews now add a conspicuous original-exit marker beside any
+candidate step whose reviewed execution returned nonzero. Such steps remain
+eligible for explicit saving, and workflow replay keeps its existing fail-fast
+behavior; the change provides visibility without filtering a potentially
+intentional debugging step.
+
+Finally, the fully unspecified task "Make it smaller" caused the model to
+invent both `/workspace/file.txt` and a mutating `gzip -9` operation. New prompt
+guidance distinguishes that no-target case from an imprecisely described
+target: when there is no file, path, or discoverable description at all, the
+model must use read-only workspace discovery instead of inventing a mutation.
+The existing vague-description guidance and all deterministic safety gates are
+unchanged.

@@ -212,6 +212,8 @@ def test_system_prompt_explains_that_direct_argv_does_not_expand_globs():
     assert "a literal string, not a file match" in _SYSTEM_PROMPT
     assert '["du", "-sh", "/workspace/reports/*"]' in _SYSTEM_PROMPT
     assert '"-exec", "du", "-sh", "{}", ";"' in _SYSTEM_PROMPT
+    assert '["du", "-sh", "/workspace/*"]' in _SYSTEM_PROMPT
+    assert '["du", "-sh", "/workspace"]' in _SYSTEM_PROMPT
 
 
 def test_system_prompt_explains_that_direct_argv_does_not_run_command_substitution():
@@ -253,6 +255,12 @@ def test_system_prompt_forbids_guessing_destructive_directory_paths():
     assert "even when your reasoning acknowledges" in _SYSTEM_PROMPT
     assert "Do not turn a description into an invented candidate path" in _SYSTEM_PROMPT
     assert '"-iname", "*reports*", "-print"' in _SYSTEM_PROMPT
+
+
+def test_system_prompt_uses_discovery_when_no_target_is_named():
+    assert "names no file, path, or discoverable target description at all" in _SYSTEM_PROMPT
+    assert "never invent a target or propose a specific mutating command" in _SYSTEM_PROMPT
+    assert '["ls", "-la", "/workspace"]' in _SYSTEM_PROMPT
 
 
 def test_system_prompt_explains_find_exec_argv_shape():
