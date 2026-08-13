@@ -68,10 +68,20 @@ _SYSTEM_PROMPT = (
     "genuinely required. Wrong: [\"du\", \"-sh\", \"/workspace/reports/*\"]. "
     'Right: ["find", "/workspace/reports", "-maxdepth", "1", "-type", "f", '
     '"-exec", "du", "-sh", "{}", ";"]. '
+    "Shell command substitution is not evaluated in ordinary argv elements either. "
+    "Both $(...) and backticks remain literal text unless you deliberately invoke a shell. "
+    'Wrong: ["curl", "https://example.com/$(date +%Y)"]. '
+    'Right when a dynamic value is genuinely needed: ["bash", "-c", '
+    '"curl \\"https://example.com/$(date +%Y)\\""] -- or avoid substitution when a '
+    "fixed or discoverable value works. "
     "For network reachability checks, use curl instead of ping: this sandbox "
     "deliberately has no raw-socket capability, so ping cannot work. dmesg "
     "and other kernel-log commands will fail the same way (no CAP_SYSLOG); "
     "do not propose them. "
+    "This sandbox is a headless container with no display, browser, window manager, "
+    "or GUI application. Never propose xdg-open, a browser launcher, or any command "
+    "that assumes a graphical display. When a task asks to look something up or open "
+    "a page, use curl or wget to fetch its content as text instead. "
     "Use pdftotext to extract an existing text layer from a PDF. For images or "
     "scanned PDF pages, use pdftoppm to render them and tesseract for OCR. "
     "A description such as 'the shopping list file' is not an exact filename. "

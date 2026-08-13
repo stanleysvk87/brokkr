@@ -833,3 +833,19 @@ real archives, a PDF-rendered scan, a sparse large file, and a Git worktree.
 Regression coverage also locks in both save paths, malformed quoting, blocked
 save and tamper-time execution, template resolution, keyword ranking, explicit
 accept/decline behavior, model fallback, audit migration, and usage tracking.
+
+## Live-use proposal guidance fixes — 2026-08-13
+
+Two model-quality gaps found during ordinary interactive use now have explicit
+system-prompt guidance. Command substitutions such as `$(date +%Y)` and
+backticks are identified as literal text in ordinary argv, with a concrete
+wrong example and a deliberate `bash -c` alternative for cases that genuinely
+need dynamic shell evaluation. This extends the same no-shell-expansion fact
+already documented for globs; it does not add a validator or policy rule.
+
+The prompt also states that the sandbox is a headless container with no display,
+browser, window manager, or GUI applications. It forbids proposing `xdg-open`
+or another graphical launcher and directs page-fetching tasks to `curl` or
+`wget` text output instead. Network opt-in behavior is unchanged. Text
+regressions lock in both pieces of guidance without blocking either syntax when
+it is legitimate literal content.

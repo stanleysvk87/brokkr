@@ -214,6 +214,19 @@ def test_system_prompt_explains_that_direct_argv_does_not_expand_globs():
     assert '"-exec", "du", "-sh", "{}", ";"' in _SYSTEM_PROMPT
 
 
+def test_system_prompt_explains_that_direct_argv_does_not_run_command_substitution():
+    assert "Shell command substitution is not evaluated" in _SYSTEM_PROMPT
+    assert "Both $(...) and backticks remain literal text" in _SYSTEM_PROMPT
+    assert '["curl", "https://example.com/$(date +%Y)"]' in _SYSTEM_PROMPT
+    assert '["bash", "-c", "curl \\"https://example.com/$(date +%Y)\\""]' in _SYSTEM_PROMPT
+
+
+def test_system_prompt_steers_browser_tasks_away_from_gui_launchers():
+    assert "headless container with no display, browser, window manager" in _SYSTEM_PROMPT
+    assert "Never propose xdg-open" in _SYSTEM_PROMPT
+    assert "use curl or wget to fetch its content as text" in _SYSTEM_PROMPT
+
+
 def test_system_prompt_steers_away_from_dmesg():
     # Same underlying cause as ping (CAP_SYSLOG dropped, same as
     # CAP_NET_RAW) -- found by dogfooding a "check kernel messages" task
