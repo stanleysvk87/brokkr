@@ -21,13 +21,20 @@ cp .env.example .env
 .venv/bin/ruff check src tests
 ```
 
-Both must pass. If you touch `sandbox/docker_sandbox.py` or
+Both must pass. The PDF/OCR tooling tests are opt-in because the normal suite
+does not require Docker; after changing the sandbox Dockerfile or its tool list,
+also run:
+
+```bash
+BROKKR_RUN_DOCKER_TESTS=1 .venv/bin/pytest -q tests/test_pdf_ocr_tooling.py
+```
+
+If you touch `sandbox/docker_sandbox.py` or
 `permissions/policy.py`, please also manually re-run the checks
 described in docs/security-model.md's "What was actually tested"
-section — they're not automated (they need a real Docker daemon and are
-slow/destructive by nature: they include actually running `rm -rf /`
-inside a throwaway sandbox container), so nothing catches a regression
-there except doing it by hand.
+section. Most of those checks are not part of the automated suite: they need a
+real Docker daemon and some are deliberately destructive, including actually
+running `rm -rf /` inside a throwaway sandbox container.
 
 ## Conventions this project actually enforces
 

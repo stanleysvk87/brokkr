@@ -81,7 +81,8 @@ development (see CHANGELOG.md's Stage 1 entry for the full detail):
   corresponding file. A write through the link failed with permission
   denied under the sandbox user and created no file in either the
   container or host `/etc`.
-- **A network request to an external host with `--network none`.**
+- **A network request to an external host with
+  `BROKKR_SANDBOX_NETWORK=none`.**
   Confirmed it failed to connect, not just failed slowly.
 - **A per-command network grant.** Docker rejects attaching bridge directly
   to a container in its special `network_mode=none`, which the initial
@@ -146,7 +147,7 @@ issue.
   raise this bar; brokkr does not currently use either, by choice — see
   README.md's "What this is not."
 - **A model that convinces its human operator to approve something bad.**
-  Human review (step [2] in docs/architecture.md) is a real gate, but it
+  Human review (step [3] in docs/architecture.md) is a real gate, but it
   is exactly as good as the human's judgment in the moment. brokkr
   cannot force a careful review; it can only make the reviewed
   information (reasoning, exact argv) as clear as possible before asking.

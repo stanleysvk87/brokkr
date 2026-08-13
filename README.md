@@ -25,7 +25,10 @@ human confirmation, the policy blocklist, exact-match remembered approvals,
 optional human-authored approval templates, and explicit human-curated memory
 all work end-to-end and are covered by tests. Individual commands can opt in to
 temporary network access while the sandbox remains isolated by default. Template
-matching remains off by default. See
+matching remains off by default. Manual/advisory handling covers commands that
+must run outside the sandbox, and `brokkr doctor` reports setup problems without
+changing the system. The sandbox image includes reviewed tools for common JSON,
+archive, Git, PDF text-extraction, and OCR tasks. See
 [CHANGELOG.md](CHANGELOG.md) for exactly what was built and verified at
 each stage, and [docs/architecture.md](docs/architecture.md) for how the
 pieces fit together.
@@ -39,10 +42,11 @@ pieces fit together.
   malicious adversary with local access.
 - **Not for untrusted multi-tenant use.** One user, one machine, one trust
   boundary. There is no concept of "users" in this project at all.
-- **Not a fire-and-forget autonomous agent.** Every command that runs was
-  either approved by a human at the time, or matches one a human explicitly
-  chose to remember. There is no mode where brokkr acts entirely on its
-  own.
+- **Not a fire-and-forget autonomous agent.** Every model-proposed command
+  that runs was either approved by a human at the time, or matches an exact
+  command or constrained template a human explicitly chose to remember.
+  `brokkr sandbox exec` is a separate direct path where the human types the
+  exact argv themselves. There is no mode where brokkr acts entirely on its own.
 
 ## Prerequisites
 
@@ -70,6 +74,9 @@ source .venv/bin/activate
 # Check Docker, Ollama, the configured model, and workspace permissions
 # without building, starting, pulling, or executing anything.
 brokkr doctor
+
+# Inspect the sandbox lifecycle without creating or starting a container.
+brokkr sandbox status
 
 # Run an exact command directly in the sandbox -- no LLM involved.
 # Useful for exploring what the sandbox can see, and for the safety
@@ -108,10 +115,12 @@ brokkr memory forget 1
 brokkr sandbox reset
 ```
 
-Everything that happens is recorded in `logs/audit.db` (queryable SQLite),
-`logs/blobs/<command_id>/` (full raw payloads — prompts, completions,
-stdout/stderr), and `logs/audit.jsonl` (a flat summary for `tail -f`).
-Execution records include whether that specific command had network access.
+Every proposal, decision, and sandbox execution is recorded in `logs/audit.db`
+(queryable SQLite), `logs/blobs/<command_id>/` (full raw payloads — prompts,
+completions, stdout/stderr), and `logs/audit.jsonl` (a flat summary for
+`tail -f`). Execution records include whether that specific command had network
+access. Read-only inspection commands and changes to curated approval/memory
+stores are not part of this execution audit trail.
 
 ## Configuration
 

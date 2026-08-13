@@ -2,8 +2,10 @@
 
 ## The pipeline
 
-Every proposal handled through `brokkr propose` goes through the same four
-gates, in order, and every gate is independently visible in the audit trail:
+Every proposal handled through `brokkr propose` enters the same four-gate
+pipeline. The human-decision gate is skipped when an exact or enabled template
+approval matches; every gate that does apply is independently visible in the
+audit trail:
 
 ```
 task description
@@ -12,12 +14,12 @@ task description
   [1] LLM proposal          brokkr/llm/client.py
       |  (structured output: {reasoning, argv, needs_network?})
       v
-  [2] human decision         brokkr/cli.py (propose command)
-      |  approve / edit / reject / manual
-      |  -- OR skipped if [3] finds an exact or enabled template match
-      v
-  [3] remembered-approval    brokkr/approvals/store.py
+  [2] remembered-approval    brokkr/approvals/store.py
       |  lookup (exact argv; optional human-authored template constraints)
+      |  a match skips [3], but never [4]
+      v
+  [3] human decision         brokkr/cli.py (when no approval matched)
+      |  approve / edit / reject / manual
       v
   [4] policy blocklist       brokkr/permissions/policy.py
       |  always checked, regardless of how the command was approved
@@ -41,13 +43,14 @@ merged into one "is this safe" check:
 - **The LLM proposal** can be wrong, but it can't do anything by itself —
   it only ever produces a JSON object. Its optional `needs_network` judgment
   changes the pre-review display, never the sandbox network state.
-- **Human review** catches the cases a human would obviously reject on
-  sight, and is the only gate with actual judgment. It can also route a
-  command to manual handling without granting brokkr any new capability.
 - **The remembered-approval store** exists purely to reduce repeated
   confirmation fatigue for command shapes a human has explicitly reviewed
   and chosen to remember. Exact matching is always available; constrained
   templates are an off-by-default opt-in described below.
+- **Human review** catches the cases a human would obviously reject on
+  sight, and is the only gate with actual judgment. It runs when no approval
+  matched, and can also route a command to manual handling without granting
+  brokkr any new capability.
 - **The policy blocklist** is a static, code-level backstop that runs no
   matter which path a command took to get there — including a remembered
   command from a previous version of the blocklist that didn't yet know
@@ -93,10 +96,12 @@ gates, brokkr records a `manual` decision and prints a copyable command plus a
 predictable result path in the existing workspace:
 
 ```
-~/brokkr-workspace/manual-<short-command-id>.txt
+<configured workspace>/manual-<short-command-id>.txt
 ```
 
-The human runs and redirects the command themselves. `brokkr manual show <id>`
+The default configured workspace is `~/brokkr-workspace`; changing
+`BROKKR_SANDBOX_WORKDIR_HOST` changes this result location too. The human runs
+and redirects the command themselves. `brokkr manual show <id>`
 resolves a unique full or short command-id prefix, reads that one result file,
 and can save the displayed result as an explicit memory note. There is no
 watcher, automatic ingestion, arbitrary-path reader, host execution, sudo
@@ -108,7 +113,7 @@ workspace directory and happens when the human explicitly invokes `show`.
 One container, `brokkr-sandbox`, is created lazily on first use and
 reused across calls to `docker exec` into it — not a fresh `docker run
 --rm` per command — so a sequence like "install a package, then use it"
-works across separate `brokkr propose`/`sandbox exec` invocations.
+works across separate `brokkr propose`/`brokkr sandbox exec` invocations.
 
 Container reuse does not mean the commands share one persistent shell.
 Each invocation starts a new process tree with the container's configured

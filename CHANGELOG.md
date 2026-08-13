@@ -1,5 +1,21 @@
 # Changelog
 
+## Documentation consolidation after rapid feature rounds -- 2026-08-13
+
+Read every shipped document against the current CLI and implementation after
+the manual mode, approval-template, per-command network, doctor, and PDF/OCR
+rounds. Corrected the architecture diagram to put approval lookup before the
+human prompt, documented the configured rather than hard-coded manual-result
+workspace, and updated the related human-review step reference.
+
+The README status now includes manual mode, doctor, and PDF/OCR tooling; its
+autonomy and audit wording now distinguishes model proposals, direct sandbox
+execution, curated stores, and read-only commands. Security reporting now
+distinguishes an unintended network path from an explicit `--allow-network`
+grant. Also corrected stale CLI spellings, removed inaccessible local-plan
+references, and documented the opt-in Docker tooling test. `.env.example`
+contains exactly every `BROKKR_*` variable read by `config.py`.
+
 ## Sandbox PDF text extraction and OCR tooling -- 2026-08-13
 
 Added the deliberately scoped Debian packages `poppler-utils` and
@@ -8,8 +24,8 @@ PDFs with a text layer, `pdftoppm` to render scanned pages, and `tesseract`
 for OCR without reaching for an unavailable Python library or treating PDF
 binary data as plain text.
 
-The LLM system prompt now points to those installed tools. Docker integration
-coverage checks both binaries and extracts a known string from a generated
+The LLM system prompt now points to those installed tools. Opt-in Docker
+integration coverage checks both binaries and extracts a known string from a generated
 one-page PDF through the real sandbox, exercising Poppler beyond a version
 check. No approval, policy, audit, network, or automatic language-selection
 behavior changed.
@@ -40,10 +56,8 @@ from day one to keep personal paths/IPs/secrets out of the repo (this
 project is intended for eventual public release), Apache-2.0 `LICENSE`,
 README stub, one trivial smoke test.
 
-No sandbox, no LLM integration, no approval logic yet — see
-`~/.claude/plans/partitioned-fluttering-sonnet.md` for the full staged
-build plan this project follows. Stage 1 (Docker sandbox execution
-primitive, no LLM yet) is next.
+No sandbox, no LLM integration, no approval logic yet. Stage 1 (Docker sandbox
+execution primitive, no LLM yet) was next.
 
 ## Stage 1: Docker sandbox execution primitive — 2026-08-12
 
@@ -62,7 +76,8 @@ itself, since Stage 1's own verification needs to run these *through* the
 sandbox to prove the Docker-level boundary holds on its own merits),
 `config.py` (`BROKKR_*` settings, `.env` over built-in defaults),
 `sandbox/Dockerfile` + `sandbox/docker_sandbox.py` (one long-lived
-container per install, `--network none` default, CPU/memory/PIDs limits,
+container per install, `BROKKR_SANDBOX_NETWORK=none` default,
+CPU/memory/PIDs limits,
 `--cap-drop ALL`, `no-new-privileges`, no Docker socket passthrough,
 single bind-mounted workspace, per-command timeout enforced *inside* the
 container via GNU `timeout` rather than host-side process management),
@@ -88,8 +103,9 @@ a non-zero exit code, a timed-out infinite loop (confirmed no leftover
 process afterward), `rm -rf /` (confirmed everything outside the mounted
 workspace is untouched — the workspace itself is real, writable storage,
 so its own contents being deleted is the mount boundary working exactly
-as designed, not a failure of it), and a network call with `--network
-none` (confirmed connection failure). All five checks produced matching,
+as designed, not a failure of it), and a network call with
+`BROKKR_SANDBOX_NETWORK=none` (confirmed connection failure). All five checks
+produced matching,
 complete records across `logs/audit.db`, `logs/blobs/`, and
 `logs/audit.jsonl`.
 
@@ -143,7 +159,7 @@ remember its exact argv; a later proposal producing that identical argv
 runs immediately, no confirmation prompt. Added `approvals/store.py`
 (`ApprovalStore`, its own `data/approvals.db`, separate from the audit
 trail on purpose -- one is curated state, the other an append-only
-record) and `brokkr approvals list/revoke`.
+record), `brokkr approvals list`, and `brokkr approvals revoke`.
 
 Matching is exact-only: the stored key is a sha256 of the canonical
 JSON-encoded argv array, nothing fuzzier. Template/generalized matching
@@ -186,9 +202,8 @@ setup, required checks, the conventions the codebase actually
 enforces, and a note on designs that were deliberately rejected rather
 than simply not-yet-built, so a contributor doesn't reintroduce them).
 
-This closes out the plan in
-`~/.claude/plans/partitioned-fluttering-sonnet.md` -- Stages 0 through
-4 are all done. What's left before a public GitHub repo is a human
+This closed out the original staged build plan -- Stages 0 through 4 were all
+done. What remained before a public GitHub repo was a human
 read-through of the whole thing, not more building.
 
 ## Dogfooding pass: 3 real bugs found and fixed — 2026-08-12
@@ -227,8 +242,8 @@ existed, which is correct Debian convention but not what most people
 
 All three fixes verified manually afterward: the interrupted-prompt
 case not aborting, `git config --global` succeeding, and `pip install`
-succeeding with `BROKKR_SANDBOX_NETWORK=bridge` (still correctly
-failing on DNS resolution with the default `--network none`, which is
+succeeding with `BROKKR_SANDBOX_NETWORK=bridge` (still correctly failing on DNS
+resolution with the default `BROKKR_SANDBOX_NETWORK=none`, which is
 the isolation working as intended, not a bug).
 
 ## More dogfooding: bare shell operators in proposals — 2026-08-12
