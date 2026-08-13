@@ -42,6 +42,7 @@ from brokkr.approvals.store import (
 )
 from brokkr.audit.store import AuditStore, ManualDecision
 from brokkr.config import load_settings
+from brokkr.doctor import DoctorCheck, run_doctor
 from brokkr.llm.client import OllamaClient
 from brokkr.memory.store import MemoryStore
 from brokkr.permissions.policy import check_prohibited
@@ -59,6 +60,23 @@ app.add_typer(manual_app, name="manual")
 
 console = Console()
 _MANUAL_ID_LENGTH = 8
+
+
+def _print_doctor_check(check: DoctorCheck) -> None:
+    labels = {
+        "pass": ("green", "PASS"),
+        "warn": ("yellow", "WARN"),
+        "fail": ("red", "FAIL"),
+    }
+    color, label = labels[check.status]
+    console.print(f"[{color}]{label}[/{color}] {check.name}: ", end="")
+    console.print(check.message, markup=False, highlight=False)
+
+
+def _format_model_size(size_bytes: int | None) -> str:
+    if size_bytes is None:
+        return "unknown"
+    return f"{size_bytes / 1_000_000_000:.1f} GB"
 
 
 def _manual_result_path(settings, command_id: str) -> Path:
@@ -180,6 +198,38 @@ def _resolve_manual_decision(audit: AuditStore, command_id_prefix: str) -> Manua
 def version() -> None:
     """Print the installed brokkr version."""
     typer.echo(__version__)
+
+
+@app.command()
+def doctor() -> None:
+    """Check local setup health without changing or executing anything."""
+    report = run_doctor(load_settings())
+    for check in report.checks:
+        _print_doctor_check(check)
+
+    if report.models:
+        table = Table(title="Local Ollama models")
+        table.add_column("Name")
+        table.add_column("Size", justify="right")
+        for model in report.models:
+            table.add_row(model.name, _format_model_size(model.size_bytes))
+        console.print(table)
+    else:
+        console.print("Local Ollama models: none available to list")
+
+    console.print("\nTypical model size guidance:")
+    console.print("  3B-4B models: roughly 3-5 GB VRAM")
+    console.print("  7B-8B models: roughly 5-8 GB VRAM")
+    console.print("  13B-14B models: roughly 10-16 GB VRAM")
+    console.print("  Smaller quantizations or CPU inference can work, but will be slower.")
+
+    passed = sum(check.status == "pass" for check in report.checks)
+    warned = sum(check.status == "warn" for check in report.checks)
+    failed = sum(check.status == "fail" for check in report.checks)
+    warning_label = "warning" if warned == 1 else "warnings"
+    console.print(f"\nSummary: {passed} passed, {warned} {warning_label}, {failed} failed")
+    if report.failed:
+        raise typer.Exit(code=1)
 
 
 @sandbox_app.command("exec")

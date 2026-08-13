@@ -1,5 +1,23 @@
 # Changelog
 
+## Read-only setup diagnostics -- 2026-08-13
+
+Added `brokkr doctor`, a fixed set of read-only checks for Docker daemon
+reachability, presence of the configured sandbox image, Ollama reachability,
+availability of the configured default model, and workspace writability. It
+also lists locally available Ollama models and prints short, static model-size
+guidance without attempting unreliable GPU or VRAM detection.
+
+Failures include actionable setup messages. In particular, a missing default
+model names the configured value and prints the exact `ollama pull <model>`
+command. A sandbox image that has not been built yet is only a warning because
+normal first use builds it automatically. Warnings keep exit status zero;
+failed checks return non-zero, and one failed subsystem does not skip the
+independent checks.
+
+The command never builds an image, starts a container, executes a sandbox
+command, pulls a model, or otherwise remediates what it finds.
+
 ## Stage 0: repo scaffold — 2026-08-12
 
 Initial commit. Empty `src/brokkr` package, `pyproject.toml` (setuptools,

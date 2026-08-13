@@ -67,6 +67,10 @@ source .venv/bin/activate
 ## Quickstart
 
 ```bash
+# Check Docker, Ollama, the configured model, and workspace permissions
+# without building, starting, pulling, or executing anything.
+brokkr doctor
+
 # Run an exact command directly in the sandbox -- no LLM involved.
 # Useful for exploring what the sandbox can see, and for the safety
 # checks in docs/security-model.md.

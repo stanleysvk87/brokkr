@@ -106,6 +106,18 @@ class DockerSandbox:
             timeout=int(settings.sandbox.command_timeout_seconds + _CLIENT_TIMEOUT_BUFFER_SECONDS)
         )
 
+    def ping(self) -> bool:
+        """Return whether the Docker daemon responds without changing state."""
+        return self._client.ping()
+
+    def image_exists(self) -> bool:
+        """Check for the configured image without building it."""
+        try:
+            self._client.images.get(self._settings.sandbox.image)
+        except ImageNotFound:
+            return False
+        return True
+
     def build_image(self, force: bool = False) -> str:
         """Builds the sandbox image from sandbox/Dockerfile if it doesn't
         already exist (or unconditionally if force=True). Returns the
