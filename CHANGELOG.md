@@ -1,5 +1,19 @@
 # Changelog
 
+## Sandbox PDF text extraction and OCR tooling -- 2026-08-13
+
+Added the deliberately scoped Debian packages `poppler-utils` and
+`tesseract-ocr` to the sandbox image. Commands can now use `pdftotext` for
+PDFs with a text layer, `pdftoppm` to render scanned pages, and `tesseract`
+for OCR without reaching for an unavailable Python library or treating PDF
+binary data as plain text.
+
+The LLM system prompt now points to those installed tools. Docker integration
+coverage checks both binaries and extracts a known string from a generated
+one-page PDF through the real sandbox, exercising Poppler beyond a version
+check. No approval, policy, audit, network, or automatic language-selection
+behavior changed.
+
 ## Read-only setup diagnostics -- 2026-08-13
 
 Added `brokkr doctor`, a fixed set of read-only checks for Docker daemon

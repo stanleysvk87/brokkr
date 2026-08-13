@@ -65,6 +65,8 @@ _SYSTEM_PROMPT = (
     "deliberately has no raw-socket capability, so ping cannot work. dmesg "
     "and other kernel-log commands will fail the same way (no CAP_SYSLOG); "
     "do not propose them. "
+    "Use pdftotext to extract an existing text layer from a PDF. For images or "
+    "scanned PDF pages, use pdftoppm to render them and tesseract for OCR. "
     "A description such as 'the shopping list file' is not an exact filename. "
     "Never infer spaces, underscores, or an extension from a description. If a "
     "task refers to a file this way and its exact path is not stated in the "

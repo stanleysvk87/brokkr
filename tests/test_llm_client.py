@@ -173,6 +173,12 @@ def test_system_prompt_steers_away_from_dmesg():
     assert "CAP_SYSLOG" in _SYSTEM_PROMPT
 
 
+def test_system_prompt_recommends_installed_pdf_and_ocr_tools():
+    assert "Use pdftotext to extract" in _SYSTEM_PROMPT
+    assert "pdftoppm" in _SYSTEM_PROMPT
+    assert "tesseract for OCR" in _SYSTEM_PROMPT
+
+
 def test_system_prompt_prefers_discovery_over_guessing_file_paths():
     assert "Never infer spaces, underscores, or an extension" in _SYSTEM_PROMPT
     assert "propose only ls or find to discover" in _SYSTEM_PROMPT

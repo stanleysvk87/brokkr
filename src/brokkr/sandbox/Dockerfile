@@ -10,6 +10,7 @@ RUN groupadd --gid 10001 brokkr \
 # "everything" defeats the point of a sandbox. Extend this list as real
 # proposed commands need specific tools; each addition should be a
 # deliberate, reviewed change, not a reflexive "just in case".
+# poppler/tesseract cover reviewed PDF text extraction and OCR tasks.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         coreutils \
@@ -21,6 +22,8 @@ RUN apt-get update \
         python-is-python3 \
         procps \
         jq \
+        poppler-utils \
+        tesseract-ocr \
         unzip \
         zip \
     && rm -rf /var/lib/apt/lists/*
