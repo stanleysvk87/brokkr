@@ -23,12 +23,15 @@ decided, and what actually ran.
 Stages 0–5 of the build are done: the sandbox mechanism, LLM proposals,
 human confirmation, the policy blocklist, exact-match remembered approvals,
 optional human-authored approval templates, and explicit human-curated memory
-all work end-to-end and are covered by tests. Named workflows can replay a
+all work end-to-end and are covered by tests. Bare `brokkr` starts an interactive
+mode that routes each typed line through the same pipeline as `propose`, with no
+shell quoting involved. Named workflows can replay a
 human-reviewed sequence only when the human explicitly runs it. Individual commands can opt in to
 temporary network access while the sandbox remains isolated by default. Template
 matching remains off by default. Manual/advisory handling covers commands that
-must run outside the sandbox, and `brokkr doctor` reports setup problems without
-changing the system. The sandbox image includes reviewed tools for common JSON,
+must run outside the sandbox, `brokkr doctor` reports setup problems without
+changing the system, and `brokkr history` browses the audit trail with
+`--decision`/`--workflow`/`--limit` filters. The sandbox image includes reviewed tools for common JSON,
 archive, Git, PDF text-extraction, and OCR tasks. See
 [CHANGELOG.md](CHANGELOG.md) for exactly what was built and verified at
 each stage, and [docs/architecture.md](docs/architecture.md) for how the
