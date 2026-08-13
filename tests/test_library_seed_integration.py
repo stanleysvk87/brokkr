@@ -90,13 +90,11 @@ def library_sandbox(tmp_path_factory):
         archive.add(archive_source, arcname="archived.txt")
     with zipfile.ZipFile(workspace / "archive.zip", "w") as archive:
         archive.writestr("zipped.txt", "zip extracted\n")
-    (workspace / "repo").mkdir()
-
     sandbox = DockerSandbox(settings)
     sandbox.reset()
     sandbox.build_image(force=True)
-    assert sandbox.exec(["git", "-C", "/workspace/repo", "init"]).exit_code == 0
-    (workspace / "repo" / "untracked.txt").write_text("git status seed\n")
+    assert sandbox.exec(["git", "-C", "/workspace", "init"]).exit_code == 0
+    (workspace / "untracked.txt").write_text("git status seed\n")
     rendered = sandbox.exec(
         [
             "pdftoppm",

@@ -175,7 +175,7 @@ _SEEDED_LIBRARY_ENTRIES = (
     (
         "git-worktree-status",
         "Show git status and changed files for the workspace repository",
-        ["git", "-C", "/workspace/repo", "status", "--short", "--branch"],
+        ["git", "-C", "/workspace", "status", "--short", "--branch"],
     ),
 )
 
