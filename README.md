@@ -82,6 +82,10 @@ brokkr --model qwen3:4b --allow-network
 # without building, starting, pulling, or executing anything.
 brokkr doctor
 
+# Browse recent proposal decisions and outcomes; filters are optional.
+brokkr history --limit 20
+brokkr history --decision blocked
+
 # Inspect the sandbox lifecycle without creating or starting a container.
 brokkr sandbox status
 

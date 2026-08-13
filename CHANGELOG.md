@@ -1,5 +1,19 @@
 # Changelog
 
+## Read-only audit history browser -- 2026-08-13
+
+Added `brokkr history`, a compact newest-first Rich table over the existing
+proposal, decision, and execution audit rows. It shows a short command ID, task,
+decision, and outcome; rejected, blocked, and manual decisions remain visible
+without an execution row. Proposal failures are also shown rather than silently
+disappearing from the day-to-day view.
+
+`--limit` bounds the result count and `--decision` filters one exact decision
+type, including useful reviews such as `--decision blocked`. Long task text and
+block reasons are normalized and truncated for a readable terminal table. This
+is a viewer only: no schema, audit-writing, approval, policy, execution, delete,
+export, or pagination behavior changed.
+
 ## Interactive task mode -- 2026-08-13
 
 Running bare `brokkr` now starts a small interactive loop. Each input line is

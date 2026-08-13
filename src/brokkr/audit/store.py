@@ -92,6 +92,38 @@ class ManualDecision:
     final_argv: list[str]
 
 
+@dataclass(frozen=True)
+class HistoryEntry:
+    command_id: str
+    created_at: str
+    task_description: str
+    decision: str | None
+    reason: str | None
+    exit_code: int | None
+    timed_out: bool
+    proposal_error: str | None
+
+    @property
+    def displayed_decision(self) -> str:
+        if self.decision is not None:
+            return self.decision
+        return "proposal_failed" if self.proposal_error else "pending"
+
+    @property
+    def outcome(self) -> str:
+        if self.exit_code is not None:
+            return "timed out" if self.timed_out else f"exit {self.exit_code}"
+        if self.decision == "manual":
+            return "manual"
+        if self.decision == "blocked":
+            return self.reason or "blocked"
+        if self.decision == "rejected":
+            return "rejected"
+        if self.proposal_error:
+            return "proposal failed"
+        return "not executed"
+
+
 class AuditStore:
     def __init__(self, settings: Settings) -> None:
         self._db_path = settings.audit_db_path
@@ -248,6 +280,48 @@ class AuditStore:
             ManualDecision(command_id=row[0], final_argv=json.loads(row[1]))
             for row in rows
             if row[1] is not None and row[0].lower().startswith(normalized)
+        ]
+
+    def list_history(
+        self, limit: int = 20, decision: str | None = None
+    ) -> list[HistoryEntry]:
+        """Return recent proposal turns without modifying the audit trail."""
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    p.command_id,
+                    p.created_at,
+                    p.task_description,
+                    d.decision,
+                    d.reason,
+                    c.exit_code,
+                    c.timed_out,
+                    p.error
+                FROM proposals AS p
+                LEFT JOIN decisions AS d ON d.command_id = p.command_id
+                LEFT JOIN commands AS c ON c.command_id = p.command_id
+                WHERE (? IS NULL OR d.decision = ?)
+                ORDER BY p.created_at DESC
+                LIMIT ?
+                """,
+                (decision, decision, limit),
+            ).fetchall()
+        return [
+            HistoryEntry(
+                command_id=row[0],
+                created_at=row[1],
+                task_description=row[2],
+                decision=row[3],
+                reason=row[4],
+                exit_code=row[5],
+                timed_out=bool(row[6]),
+                proposal_error=row[7],
+            )
+            for row in rows
         ]
 
     def record_execution(

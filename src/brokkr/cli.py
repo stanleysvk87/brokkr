@@ -105,6 +105,13 @@ def _format_model_size(size_bytes: int | None) -> str:
     return f"{size_bytes / 1_000_000_000:.1f} GB"
 
 
+def _compact_text(value: str, limit: int) -> str:
+    compact = " ".join(value.split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 3] + "..."
+
+
 def _manual_result_path(settings, command_id: str) -> Path:
     return settings.sandbox.workdir_host / f"manual-{command_id[:_MANUAL_ID_LENGTH]}.txt"
 
@@ -256,6 +263,42 @@ def doctor() -> None:
     console.print(f"\nSummary: {passed} passed, {warned} {warning_label}, {failed} failed")
     if report.failed:
         raise typer.Exit(code=1)
+
+
+@app.command()
+def history(
+    limit: int = typer.Option(
+        20,
+        "--limit",
+        min=1,
+        help="Maximum number of recent proposal entries to show.",
+    ),
+    decision: str | None = typer.Option(
+        None,
+        "--decision",
+        help="Show only one exact decision type, such as blocked or rejected.",
+    ),
+) -> None:
+    """List recent proposal decisions and outcomes from the audit trail."""
+    entries = AuditStore(load_settings()).list_history(limit=limit, decision=decision)
+    if not entries:
+        message = "no matching history" if decision is not None else "no history yet"
+        console.print(f"[yellow]{message}[/yellow]")
+        return
+
+    table = Table()
+    table.add_column("id", width=_MANUAL_ID_LENGTH, no_wrap=True)
+    table.add_column("task", max_width=24, no_wrap=True, overflow="ellipsis")
+    table.add_column("decision", max_width=15, no_wrap=True, overflow="ellipsis")
+    table.add_column("outcome", max_width=20, no_wrap=True, overflow="ellipsis")
+    for entry in entries:
+        table.add_row(
+            entry.command_id[:_MANUAL_ID_LENGTH],
+            _compact_text(entry.task_description, 48),
+            entry.displayed_decision,
+            _compact_text(entry.outcome, 44),
+        )
+    console.print(table)
 
 
 @sandbox_app.command("exec")
