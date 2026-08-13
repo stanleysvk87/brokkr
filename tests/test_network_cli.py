@@ -157,3 +157,37 @@ def test_sandbox_exec_threads_explicit_network_flag_and_audits_it(monkeypatch, s
     assert "network access enabled for this execution" in output.getvalue()
     with sqlite3.connect(settings.audit_db_path) as conn:
         assert conn.execute("SELECT network_enabled FROM commands").fetchone() == (1,)
+
+
+@pytest.mark.parametrize(
+    ("exit_code", "timed_out", "expected_color"),
+    [(0, False, "\x1b[33m"), (1, False, "\x1b[31m"), (124, True, "\x1b[31m")],
+)
+def test_execution_stderr_style_reflects_outcome(
+    monkeypatch, exit_code, timed_out, expected_color
+):
+    output = StringIO()
+    monkeypatch.setattr(
+        cli,
+        "console",
+        Console(file=output, force_terminal=True, color_system="standard"),
+    )
+    result = SandboxExecutionResult(
+        command=["test-command"],
+        exit_code=exit_code,
+        timed_out=timed_out,
+        truncated=False,
+        stdout="",
+        stderr="informational or error output\n",
+        duration_ms=1.0,
+        container_id="container",
+        image_id="image",
+        network_enabled=False,
+    )
+
+    cli._print_execution_output(result)
+
+    rendered = output.getvalue()
+    assert expected_color in rendered
+    if exit_code == 0 and not timed_out:
+        assert "\x1b[31m" not in rendered

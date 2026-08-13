@@ -68,10 +68,25 @@ _SYSTEM_PROMPT = (
     "Use pdftotext to extract an existing text layer from a PDF. For images or "
     "scanned PDF pages, use pdftoppm to render them and tesseract for OCR. "
     "A description such as 'the shopping list file' is not an exact filename. "
-    "Never infer spaces, underscores, or an extension from a description. If a "
-    "task refers to a file this way and its exact path is not stated in the "
-    "current task or human-provided context, propose only ls or find to discover "
-    "it; do not propose rm, mv, or another mutation with a guessed path. "
+    "The same is true of a plausible-sounding directory name such as 'the reports "
+    "folder'. Never infer spaces, underscores, or an extension from a description, "
+    "and never infer a path from one. Hard rule: if a task asks to delete or modify "
+    "an item referenced "
+    "this way and its exact path is not stated in the current task or human-provided "
+    "context, propose only a read-only ls or find without -exec or -delete to discover "
+    "it. Never include rm, mv, or any other mutation with a guessed path in the same "
+    "proposal, even when your reasoning acknowledges that the path is ambiguous. "
+    "Do not turn a description into an invented candidate path such as "
+    "'/workspace/reports_folder'. Search a known parent read-only instead; for example, "
+    'use ["find", "/workspace", "-type", "d", "-iname", "*reports*", "-print"] '
+    "to discover a directory described as 'the reports folder'. "
+    "For a deletion preview or dry run, answer the specific question with a read-only "
+    "command targeting the confirmed path, such as find <path> to list exactly what "
+    "would be removed or du -sh <path> to show its size; do not substitute a generic "
+    "listing of an unrelated directory. When proposing find ... -exec, '{}' and its "
+    "terminator (';' or '+') must be separate argv elements because no shell will "
+    'split them. Correct example: ["find", "/workspace", "-type", "f", "-exec", '
+    '"stat", "-c", "%s %n", "{}", ";"]. '
     "Set needs_network to true only when the proposed command requires network "
     "access. This is informational for the human and does not grant access. "
     "Respond only with the JSON object described by the schema."
@@ -81,8 +96,8 @@ _SYSTEM_PROMPT = (
 # Standalone argv tokens that only mean anything to a shell. A quoted
 # string legitimately *containing* one of these (e.g. an argument whose
 # value happens to be "a|b") is fine and untouched -- this only rejects
-# an element that IS one of these, verbatim, which is never a valid
-# literal argument to any real command.
+# an element that IS one of these, verbatim. The one narrow exception is
+# find's `-exec` terminator: direct argv must contain `;` as its own token.
 _BARE_SHELL_OPERATOR_TOKENS = frozenset({"|", "||", "&&", ";", ">", ">>", "<", "<<", "&"})
 
 
@@ -101,7 +116,24 @@ class _ProposalSchema(BaseModel):
     @field_validator("argv")
     @classmethod
     def _no_bare_shell_operators(cls, value: list[str]) -> list[str]:
-        bad_tokens = [token for token in value if token in _BARE_SHELL_OPERATOR_TOKENS]
+        is_find = value[0].rsplit("/", 1)[-1] == "find"
+        find_exec_terminators: set[int] = set()
+        if is_find:
+            search_from = 0
+            while "-exec" in value[search_from:]:
+                exec_index = value.index("-exec", search_from)
+                try:
+                    terminator_index = value.index(";", exec_index + 1)
+                except ValueError:
+                    break
+                find_exec_terminators.add(terminator_index)
+                search_from = terminator_index + 1
+        bad_tokens = [
+            token
+            for index, token in enumerate(value)
+            if token in _BARE_SHELL_OPERATOR_TOKENS
+            and index not in find_exec_terminators
+        ]
         if bad_tokens:
             raise ValueError(
                 f"argv contains a bare shell operator token {bad_tokens!r} -- "

@@ -48,7 +48,11 @@ from brokkr.doctor import DoctorCheck, run_doctor
 from brokkr.llm.client import OllamaClient
 from brokkr.memory.store import MemoryStore
 from brokkr.permissions.policy import check_prohibited
-from brokkr.sandbox.docker_sandbox import DockerSandbox, SandboxError
+from brokkr.sandbox.docker_sandbox import (
+    DockerSandbox,
+    SandboxError,
+    SandboxExecutionResult,
+)
 
 app = typer.Typer(
     help="brokkr -- a local, sandboxed, tool-augmented LLM agent.",
@@ -86,6 +90,14 @@ def _proposal_services(settings: Settings | None = None) -> ProposalServices:
         memory=MemoryStore(loaded_settings),
         client=OllamaClient(loaded_settings),
     )
+
+
+def _print_execution_output(result: SandboxExecutionResult) -> None:
+    if result.stdout:
+        console.print(result.stdout, end="")
+    if result.stderr:
+        stderr_style = "red" if result.timed_out or result.exit_code != 0 else "yellow"
+        console.print(result.stderr, end="", style=stderr_style)
 
 
 def _print_doctor_check(check: DoctorCheck) -> None:
@@ -335,10 +347,7 @@ def sandbox_exec(
 
     audit.record_execution(command_id, result, source="manual")
 
-    if result.stdout:
-        console.print(result.stdout, end="")
-    if result.stderr:
-        console.print(f"[red]{result.stderr}[/red]", end="")
+    _print_execution_output(result)
 
     status = "timed out" if result.timed_out else f"exit {result.exit_code}"
     console.print(f"\n[dim]-- {status}, {result.duration_ms:.0f}ms, command_id={command_id}[/dim]")
@@ -489,10 +498,7 @@ def _run_proposal(
 
     audit.record_execution(command_id, exec_result, source=f"llm_{decision}")
 
-    if exec_result.stdout:
-        console.print(exec_result.stdout, end="")
-    if exec_result.stderr:
-        console.print(f"[red]{exec_result.stderr}[/red]", end="")
+    _print_execution_output(exec_result)
 
     status = "timed out" if exec_result.timed_out else f"exit {exec_result.exit_code}"
     console.print(

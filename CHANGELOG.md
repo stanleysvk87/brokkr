@@ -1,5 +1,23 @@
 # Changelog
 
+## Round 21 dogfooding fixes -- 2026-08-13
+
+Tightened command-proposal guidance after free-form VM dogfooding. Destructive
+tasks may no longer combine an ambiguous, plausible-sounding file or directory
+name with a guessed mutation: they must first propose read-only discovery, even
+when their reasoning already notices the ambiguity. Deletion previews now target
+the confirmed item with a useful read-only listing or size check instead of
+substituting a generic directory listing.
+
+The prompt now also shows the direct-argv shape required by `find -exec`, where
+`{}` and `;` (or `+`) are separate elements. Validation permits that narrowly
+valid `find` terminator while continuing to reject shell operators elsewhere.
+
+Execution output styling now follows the command outcome rather than treating
+every byte written to stderr as an error. Stderr from a successful command is
+shown as a warning, while failed and timed-out command stderr remains red. This
+applies consistently to direct sandbox execution and model-proposal execution.
+
 ## Read-only audit history browser -- 2026-08-13
 
 Added `brokkr history`, a compact newest-first Rich table over the existing

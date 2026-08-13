@@ -146,6 +146,48 @@ def test_propose_errors_on_bare_shell_operator_token(monkeypatch, settings):
     )
 
 
+def test_propose_accepts_separate_find_exec_terminator(monkeypatch, settings):
+    valid_content = json.dumps(
+        {
+            "reasoning": "show file sizes",
+            "argv": [
+                "find",
+                "/workspace",
+                "-type",
+                "f",
+                "-exec",
+                "stat",
+                "-c",
+                "%s %n",
+                "{}",
+                ";",
+            ],
+        }
+    )
+    monkeypatch.setattr(httpx, "post", lambda *a, **kw: _fake_response(valid_content))
+
+    result = OllamaClient(settings).propose("show file sizes")
+
+    assert result.error is None
+    assert result.proposal is not None
+    assert result.proposal.argv[-2:] == ["{}", ";"]
+
+
+def test_propose_rejects_extra_shell_operator_after_find_exec(monkeypatch, settings):
+    invalid_content = json.dumps(
+        {
+            "reasoning": "invalid extra command separator",
+            "argv": ["find", "/workspace", "-exec", "echo", "{}", ";", ";", "id"],
+        }
+    )
+    monkeypatch.setattr(httpx, "post", lambda *a, **kw: _fake_response(invalid_content))
+
+    result = OllamaClient(settings).propose("find files")
+
+    assert result.proposal is None
+    assert "bare shell operator" in result.error
+
+
 def test_propose_errors_on_connection_failure(monkeypatch, settings):
     def _raise(*args, **kwargs):
         raise httpx.ConnectError("connection refused")
@@ -181,5 +223,25 @@ def test_system_prompt_recommends_installed_pdf_and_ocr_tools():
 
 def test_system_prompt_prefers_discovery_over_guessing_file_paths():
     assert "Never infer spaces, underscores, or an extension" in _SYSTEM_PROMPT
-    assert "propose only ls or find to discover" in _SYSTEM_PROMPT
-    assert "do not propose rm, mv" in _SYSTEM_PROMPT
+    assert "propose only a read-only ls or find without -exec or -delete" in _SYSTEM_PROMPT
+    assert "Never include rm, mv" in _SYSTEM_PROMPT
+
+
+def test_system_prompt_forbids_guessing_destructive_directory_paths():
+    assert "plausible-sounding directory name" in _SYSTEM_PROMPT
+    assert "Hard rule" in _SYSTEM_PROMPT
+    assert "even when your reasoning acknowledges" in _SYSTEM_PROMPT
+    assert "Do not turn a description into an invented candidate path" in _SYSTEM_PROMPT
+    assert '"-iname", "*reports*", "-print"' in _SYSTEM_PROMPT
+
+
+def test_system_prompt_explains_find_exec_argv_shape():
+    assert "'{}' and its terminator (';' or '+') must be separate argv elements" in _SYSTEM_PROMPT
+    assert '"{}", ";"' in _SYSTEM_PROMPT
+
+
+def test_system_prompt_uses_targeted_read_only_deletion_previews():
+    assert "deletion preview or dry run" in _SYSTEM_PROMPT
+    assert "find <path>" in _SYSTEM_PROMPT
+    assert "du -sh <path>" in _SYSTEM_PROMPT
+    assert "do not substitute a generic listing" in _SYSTEM_PROMPT
