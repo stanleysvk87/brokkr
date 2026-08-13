@@ -40,7 +40,10 @@ from brokkr.approvals.store import (
     ApprovalTemplate,
     TemplateConstraint,
     TemplateValidationError,
+    Workflow,
+    WorkflowValidationError,
     format_template,
+    validate_workflow_name,
 )
 from brokkr.audit.store import AuditStore, ManualDecision
 from brokkr.config import Settings, load_settings
@@ -63,10 +66,12 @@ sandbox_app = typer.Typer(help="Direct control of the Docker sandbox (Stage 1, n
 approvals_app = typer.Typer(help="List and revoke remembered (auto-approved) commands.")
 memory_app = typer.Typer(help="Manage human-curated context for future proposals.")
 manual_app = typer.Typer(help="Inspect results from commands you ran manually.")
+workflow_app = typer.Typer(help="Save and explicitly run reviewed command workflows.")
 app.add_typer(sandbox_app, name="sandbox")
 app.add_typer(approvals_app, name="approvals")
 app.add_typer(memory_app, name="memory")
 app.add_typer(manual_app, name="manual")
+app.add_typer(workflow_app, name="workflow")
 
 console = Console()
 _MANUAL_ID_LENGTH = 8
@@ -290,11 +295,22 @@ def history(
         "--decision",
         help="Show only one exact decision type, such as blocked or rejected.",
     ),
+    workflow: str | None = typer.Option(
+        None,
+        "--workflow",
+        help="Show only steps from runs of this exact workflow name.",
+    ),
 ) -> None:
     """List recent proposal decisions and outcomes from the audit trail."""
-    entries = AuditStore(load_settings()).list_history(limit=limit, decision=decision)
+    entries = AuditStore(load_settings()).list_history(
+        limit=limit, decision=decision, workflow=workflow
+    )
     if not entries:
-        message = "no matching history" if decision is not None else "no history yet"
+        message = (
+            "no matching history"
+            if decision is not None or workflow is not None
+            else "no history yet"
+        )
         console.print(f"[yellow]{message}[/yellow]")
         return
 
@@ -303,12 +319,14 @@ def history(
     table.add_column("task", max_width=24, no_wrap=True, overflow="ellipsis")
     table.add_column("decision", max_width=15, no_wrap=True, overflow="ellipsis")
     table.add_column("outcome", max_width=20, no_wrap=True, overflow="ellipsis")
+    table.add_column("run", width=_MANUAL_ID_LENGTH, no_wrap=True)
     for entry in entries:
         table.add_row(
             entry.command_id[:_MANUAL_ID_LENGTH],
             _compact_text(entry.task_description, 48),
             entry.displayed_decision,
             _compact_text(entry.outcome, 44),
+            entry.workflow_run_id[:_MANUAL_ID_LENGTH] if entry.workflow_run_id else "",
         )
     console.print(table)
 
@@ -659,6 +677,238 @@ def manual_show(
         command = shlex.join(decision.final_argv)
         note = MemoryStore(settings).add(f"Manual result for {command}:\n{contents}")
         console.print(f"[green]added memory {note.id}[/green]")
+
+
+def _parse_previous_stdout_templates(values: list[str]) -> dict[int, str]:
+    mappings: dict[int, str] = {}
+    for value in values:
+        position_text, separator, template_id = value.partition("=")
+        if not separator or not position_text.isdigit() or not template_id:
+            raise WorkflowValidationError(
+                "--from-previous must use STEP=TEMPLATE_ID, for example 2=tpl_abcd"
+            )
+        position = int(position_text)
+        if position in mappings:
+            raise WorkflowValidationError(
+                f"workflow step {position} has more than one template override"
+            )
+        mappings[position] = template_id
+    return mappings
+
+
+def _print_workflow(workflow: Workflow) -> None:
+    console.print(f"[bold]Workflow {workflow.name}[/bold]")
+    for step in workflow.steps:
+        suffix = (
+            f" [template {step.template_id}, variable from previous stdout]"
+            if step.use_previous_stdout
+            else ""
+        )
+        console.print(
+            f"  {step.position}. {shlex.join(step.argv)}{suffix}",
+            markup=False,
+            highlight=False,
+        )
+
+
+@workflow_app.command("save")
+def workflow_save(
+    name: str = typer.Argument(..., help="Unique human-chosen workflow name."),
+    steps: int = typer.Option(
+        ...,
+        "--steps",
+        min=1,
+        help="Number of most recent human-approved proposal executions to capture.",
+    ),
+    from_previous: list[str] | None = typer.Option(
+        None,
+        "--from-previous",
+        help="Replace STEP's one template variable with previous stdout: STEP=TEMPLATE_ID.",
+    ),
+) -> None:
+    """Saves recent individually reviewed commands as a named workflow."""
+    settings = load_settings()
+    audit = AuditStore(settings)
+    approvals = ApprovalStore(settings)
+    try:
+        normalized_name = validate_workflow_name(name)
+    except WorkflowValidationError as exc:
+        console.print(f"[red]workflow not saved:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    captured = audit.last_reviewed_commands(steps)
+    if len(captured) != steps:
+        console.print(
+            f"[yellow]only {len(captured)} human-approved proposal executions are available; "
+            f"need {steps}[/yellow]"
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        mappings = _parse_previous_stdout_templates(from_previous or [])
+        prepared = approvals.prepare_workflow_steps(
+            [entry.argv for entry in captured], mappings
+        )
+    except WorkflowValidationError as exc:
+        console.print(f"[red]workflow not saved:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"[bold]Steps to save as {normalized_name}:[/bold]")
+    preview = Workflow(normalized_name, prepared, "", None, 0)
+    _print_workflow(preview)
+    if not Confirm.ask("Save this workflow?", default=False):
+        console.print("[yellow]workflow not saved[/yellow]")
+        return
+
+    try:
+        workflow = approvals.create_workflow(normalized_name, prepared)
+    except WorkflowValidationError as exc:
+        console.print(f"[red]workflow not saved:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
+    console.print(f"[green]saved workflow {workflow.name}[/green]")
+
+
+@workflow_app.command("list")
+def workflow_list() -> None:
+    """Lists saved workflows."""
+    workflows = ApprovalStore(load_settings()).list_workflows()
+    if not workflows:
+        console.print("[yellow]no saved workflows[/yellow]")
+        return
+    table = Table("name", "steps", "used", "created")
+    for workflow in workflows:
+        table.add_row(
+            workflow.name,
+            str(len(workflow.steps)),
+            str(workflow.use_count),
+            workflow.created_at,
+        )
+    console.print(table)
+
+
+@workflow_app.command("show")
+def workflow_show(name: str = typer.Argument(...)) -> None:
+    """Shows every saved step without running anything."""
+    workflow = ApprovalStore(load_settings()).get_workflow(name)
+    if workflow is None:
+        console.print(f"[yellow]no workflow named {name}[/yellow]")
+        raise typer.Exit(code=1)
+    _print_workflow(workflow)
+
+
+@workflow_app.command("delete")
+def workflow_delete(name: str = typer.Argument(...)) -> None:
+    """Deletes a saved workflow without changing its source approvals."""
+    if ApprovalStore(load_settings()).delete_workflow(name):
+        console.print(f"[green]deleted workflow {name}[/green]")
+    else:
+        console.print(f"[yellow]no workflow named {name}[/yellow]")
+        raise typer.Exit(code=1)
+
+
+@workflow_app.command("run")
+def workflow_run(
+    name: str = typer.Argument(...),
+    timeout: float | None = typer.Option(
+        None, "--timeout", help="Override the timeout for every workflow step."
+    ),
+) -> None:
+    """Explicitly runs a saved workflow, stopping at the first failed step."""
+    settings = load_settings()
+    approvals = ApprovalStore(settings)
+    workflow = approvals.get_workflow(name)
+    if workflow is None:
+        console.print(f"[yellow]no workflow named {name}[/yellow]")
+        raise typer.Exit(code=1)
+
+    audit = AuditStore(settings)
+    workflow_run_id = audit.new_command_id()
+    approvals.mark_workflow_used(name)
+    console.print(
+        f"[bold]Running workflow {name}[/bold] "
+        f"[dim](run_id={workflow_run_id})[/dim]"
+    )
+    previous_stdout: str | None = None
+    sandbox: DockerSandbox | None = None
+
+    for step in workflow.steps:
+        command_id = audit.new_command_id()
+        console.print(f"\n[bold]Step {step.position}/{len(workflow.steps)}[/bold]")
+        try:
+            argv = approvals.resolve_workflow_step(step, previous_stdout)
+        except WorkflowValidationError as exc:
+            audit.record_decision(
+                command_id,
+                "blocked",
+                step.argv,
+                reason=str(exc),
+                workflow_run_id=workflow_run_id,
+                workflow_name=name,
+                workflow_step=step.position,
+            )
+            console.print(f"[red]workflow stopped at step {step.position}:[/red] {exc}")
+            console.print("[yellow]later steps did not run[/yellow]")
+            raise typer.Exit(code=1) from exc
+
+        console.print(f"command: {shlex.join(argv)}", markup=False, highlight=False)
+        blocked_reason = check_prohibited(argv)
+        if blocked_reason is not None:
+            audit.record_decision(
+                command_id,
+                "blocked",
+                argv,
+                reason=blocked_reason,
+                workflow_run_id=workflow_run_id,
+                workflow_name=name,
+                workflow_step=step.position,
+            )
+            console.print(
+                f"[red]workflow stopped at step {step.position}, blocked by policy:[/red] "
+                f"{blocked_reason}"
+            )
+            console.print("[yellow]later steps did not run[/yellow]")
+            raise typer.Exit(code=1)
+
+        audit.record_decision(
+            command_id,
+            "workflow",
+            argv,
+            workflow_run_id=workflow_run_id,
+            workflow_name=name,
+            workflow_step=step.position,
+        )
+        if step.template_id is not None:
+            approvals.mark_template_used(step.template_id)
+        if sandbox is None:
+            sandbox = DockerSandbox(settings)
+        try:
+            result = sandbox.exec(argv, timeout=timeout, network=False)
+        except SandboxError as exc:
+            console.print(f"[red]workflow stopped at step {step.position}:[/red] {exc}")
+            console.print("[yellow]later steps did not run[/yellow]")
+            raise typer.Exit(code=1) from exc
+
+        audit.record_execution(
+            command_id,
+            result,
+            source="workflow",
+            workflow_run_id=workflow_run_id,
+            workflow_name=name,
+            workflow_step=step.position,
+        )
+        _print_execution_output(result)
+        status = "timed out" if result.timed_out else f"exit {result.exit_code}"
+        console.print(
+            f"\n[dim]-- step {step.position}: {status}, {result.duration_ms:.0f}ms, "
+            f"command_id={command_id}[/dim]"
+        )
+        if result.timed_out or result.exit_code != 0:
+            console.print(
+                f"[red]workflow stopped at step {step.position}; later steps did not run[/red]"
+            )
+            raise typer.Exit(code=124 if result.timed_out else result.exit_code)
+        previous_stdout = result.stdout.strip()
+
+    console.print(f"[green]workflow {name} completed ({len(workflow.steps)} steps)[/green]")
 
 
 @approvals_app.command("list")

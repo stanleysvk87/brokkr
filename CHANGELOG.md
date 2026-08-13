@@ -1,5 +1,28 @@
 # Changelog
 
+## Named multi-step workflow templates -- 2026-08-13
+
+Added `brokkr workflow save/list/show/run/delete` for explicitly replaying a
+human-reviewed sequence of commands. Saving captures only recent proposal
+executions whose final decision was `approved` or `edited`, shows the exact
+ordered argv, and asks for confirmation. Workflows are never proposed or
+selected by the model and never matched from natural language; only a human who
+types the saved name can run one.
+
+Every workflow step receives a new command ID, the current static policy check,
+and the same Docker sandbox execution path as an ordinary command. The first
+constraint failure, policy block, sandbox error, timeout, or non-zero exit stops
+the run immediately and prevents later steps from executing. Audit decision and
+command rows carry the shared workflow run ID, name, and step number; history
+shows workflow steps and supports `--workflow <name>` filtering.
+
+A deliberately narrow data-flow option lets a later step reference an existing
+single-command template with exactly one variable. The whole trimmed stdout of
+the immediately previous successful step fills that position only when it
+passes the template's existing human-authored path, enum, or regex constraint.
+There is no output parsing, capture extraction, multi-step lookback, fallback,
+continue-on-error mode, or model-authored workflow plan.
+
 ## Direct-argv glob guidance -- 2026-08-13
 
 Round 23 dogfooding found a proposal that passed a wildcard path directly to

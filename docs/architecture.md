@@ -35,6 +35,13 @@ Steps [1]–[4] never execute the proposed command. An approved command reaches
 the sandbox in step [5]; a manual decision stops after policy and only prints
 instructions for the human, who decides whether and where to run it.
 
+Named workflows are a separate, explicitly invoked replay path. The model never
+proposes or selects a workflow. `brokkr workflow save` captures recent commands
+that already passed individual human review; `brokkr workflow run <name>` replays
+their fixed argv in order. Every resolved step enters at gate [4], receives a
+fresh policy check, then uses the same sandbox execution path at [5]. A failure,
+timeout, invalid template variable, or policy block stops the sequence immediately.
+
 ## Why four separate gates instead of one
 
 Each gate catches a different failure mode, and they're deliberately not
@@ -86,6 +93,12 @@ this three-way split instead of a single log format.
 `brokkr sandbox exec` (the direct, no-LLM entry point) only ever writes
 a `commands` row — there's no proposal or decision to record, since a
 human typed the exact command themselves.
+
+Workflow replay has no proposal row because no model call occurs. Each step has
+its own `command_id` and decision/execution rows, plus a shared
+`workflow_run_id`, workflow name, and step number. A blocked or unresolved step
+therefore remains auditable even though it has no execution row. `brokkr history`
+includes these steps, and `--workflow <name>` filters them.
 
 ## Manual/advisory results
 
@@ -182,6 +195,26 @@ even consulted while the flag is off. A match is recorded as
 final argv still passes through the static policy blocklist before execution.
 This explicit human authorship is the safety property that avoids
 reintroducing "the model decides what's safe to skip" under a new name.
+
+## Named multi-step workflows: explicit replay only
+
+Workflows live in the same human-curated approval database but are not approval
+matches. A workflow is created only from the last N `approved` or `edited`
+proposal executions and runs only when the human types its exact name. There is
+no natural-language lookup, model-generated plan, or automatic workflow match.
+
+Steps normally retain fixed argv. At save time, a later step can explicitly
+reference an existing single-command template with exactly one variable. During
+replay, that variable receives the whole trimmed stdout of the immediately
+previous successful step and must pass the template's existing
+`path_under_workdir`, enum, or full-match regex constraint. Validation failure
+stops the workflow; there is no fallback, extraction, or value guessing.
+
+Workflow execution has no per-step confirmation because every captured command
+was individually reviewed and the saved sequence is inspectable with
+`workflow show`. This does not weaken later defenses: policy is checked again
+for every resolved argv, and any non-zero exit or timeout prevents all later
+steps from running. There is deliberately no continue-on-error mode.
 
 ## Possible eventual convergence: looking up a known-good script instead of generating one
 

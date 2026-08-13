@@ -50,6 +50,23 @@ CREATE TABLE IF NOT EXISTS approval_templates (
     last_used_at TEXT,
     use_count INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS workflows (
+    name TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT,
+    use_count INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS workflow_steps (
+    workflow_name TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    argv_json TEXT NOT NULL,
+    template_id TEXT,
+    use_previous_stdout INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (workflow_name, position),
+    FOREIGN KEY (workflow_name) REFERENCES workflows(name) ON DELETE CASCADE
+);
 """
 
 _WORKSPACE_ROOT = PurePosixPath("/workspace")
@@ -89,8 +106,40 @@ class ApprovalTemplate:
     use_count: int
 
 
+@dataclass(frozen=True)
+class WorkflowStep:
+    position: int
+    argv: list[str]
+    template_id: str | None = None
+    use_previous_stdout: bool = False
+
+
+@dataclass(frozen=True)
+class Workflow:
+    name: str
+    steps: list[WorkflowStep]
+    created_at: str
+    last_used_at: str | None
+    use_count: int
+
+
 class TemplateValidationError(ValueError):
     """Raised when a human-authored template cannot be saved safely."""
+
+
+class WorkflowValidationError(ValueError):
+    """Raised when a human-authored workflow is invalid or cannot resolve."""
+
+
+def validate_workflow_name(name: str) -> str:
+    normalized = name.strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", normalized):
+        raise WorkflowValidationError(
+            "workflow name must use only letters, numbers, '.', '_', or '-'"
+        )
+    if len(normalized) > 64:
+        raise WorkflowValidationError("workflow name must be at most 64 characters")
+    return normalized
 
 
 def command_hash(argv: list[str]) -> str:
@@ -192,6 +241,7 @@ class ApprovalStore:
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path)
+        conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA journal_mode=WAL")
         conn.row_factory = sqlite3.Row
         return conn
@@ -323,6 +373,212 @@ class ApprovalStore:
         with self._connect() as conn:
             cursor = conn.execute("DELETE FROM approval_templates WHERE id = ?", (template_id,))
         return cursor.rowcount > 0
+
+    def get_template(self, template_id: str) -> ApprovalTemplate | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM approval_templates WHERE id = ?", (template_id,)
+            ).fetchone()
+        return self._row_to_template(row) if row else None
+
+    def prepare_workflow_steps(
+        self,
+        commands: list[list[str]],
+        previous_stdout_templates: dict[int, str] | None = None,
+    ) -> list[WorkflowStep]:
+        """Validate captured commands and optional 1-based template overrides."""
+        if not commands:
+            raise WorkflowValidationError("a workflow requires at least one step")
+        if any(not command for command in commands):
+            raise WorkflowValidationError("workflow commands must not be empty")
+
+        overrides = previous_stdout_templates or {}
+        if any(position < 2 or position > len(commands) for position in overrides):
+            raise WorkflowValidationError(
+                "previous-stdout template positions must be between 2 and the step count"
+            )
+
+        steps: list[WorkflowStep] = []
+        for position, argv in enumerate(commands, start=1):
+            template_id = overrides.get(position)
+            if template_id is None:
+                steps.append(WorkflowStep(position=position, argv=list(argv)))
+                continue
+
+            template = self.get_template(template_id)
+            if template is None:
+                raise WorkflowValidationError(f"no approval template with id {template_id}")
+            variable_count = sum(part.variable is not None for part in template.parts)
+            if variable_count != 1:
+                raise WorkflowValidationError(
+                    f"template {template_id} must have exactly one variable position"
+                )
+            if not _template_matches(template, argv):
+                raise WorkflowValidationError(
+                    f"template {template_id} does not match captured step {position}"
+                )
+            steps.append(
+                WorkflowStep(
+                    position=position,
+                    argv=list(argv),
+                    template_id=template_id,
+                    use_previous_stdout=True,
+                )
+            )
+        return steps
+
+    def create_workflow(self, name: str, steps: list[WorkflowStep]) -> Workflow:
+        normalized_name = validate_workflow_name(name)
+        if not steps or [step.position for step in steps] != list(range(1, len(steps) + 1)):
+            raise WorkflowValidationError("workflow steps must be ordered from 1 without gaps")
+        for step in steps:
+            if not step.argv:
+                raise WorkflowValidationError("workflow commands must not be empty")
+            if step.use_previous_stdout != (step.template_id is not None):
+                raise WorkflowValidationError(
+                    f"workflow step {step.position} has inconsistent template data flow"
+                )
+            if step.template_id is None:
+                continue
+            if step.position == 1:
+                raise WorkflowValidationError(
+                    "workflow step 1 cannot use previous-step stdout"
+                )
+            template = self.get_template(step.template_id)
+            if template is None:
+                raise WorkflowValidationError(
+                    f"no approval template with id {step.template_id}"
+                )
+            if sum(part.variable is not None for part in template.parts) != 1:
+                raise WorkflowValidationError(
+                    f"template {step.template_id} must have exactly one variable position"
+                )
+            if not _template_matches(template, step.argv):
+                raise WorkflowValidationError(
+                    f"template {step.template_id} does not match captured step {step.position}"
+                )
+
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            with self._connect() as conn:
+                conn.execute(
+                    "INSERT INTO workflows (name, created_at, use_count) VALUES (?, ?, 0)",
+                    (normalized_name, now),
+                )
+                conn.executemany(
+                    """
+                    INSERT INTO workflow_steps (
+                        workflow_name, position, argv_json, template_id,
+                        use_previous_stdout
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            normalized_name,
+                            step.position,
+                            json.dumps(step.argv, ensure_ascii=False),
+                            step.template_id,
+                            int(step.use_previous_stdout),
+                        )
+                        for step in steps
+                    ],
+                )
+        except sqlite3.IntegrityError as exc:
+            raise WorkflowValidationError(
+                f"workflow {normalized_name!r} already exists"
+            ) from exc
+        workflow = self.get_workflow(normalized_name)
+        assert workflow is not None
+        return workflow
+
+    def get_workflow(self, name: str) -> Workflow | None:
+        with self._connect() as conn:
+            workflow_row = conn.execute(
+                "SELECT * FROM workflows WHERE name = ?", (name,)
+            ).fetchone()
+            if workflow_row is None:
+                return None
+            step_rows = conn.execute(
+                "SELECT * FROM workflow_steps WHERE workflow_name = ? ORDER BY position",
+                (name,),
+            ).fetchall()
+        return Workflow(
+            name=workflow_row["name"],
+            steps=[
+                WorkflowStep(
+                    position=row["position"],
+                    argv=json.loads(row["argv_json"]),
+                    template_id=row["template_id"],
+                    use_previous_stdout=bool(row["use_previous_stdout"]),
+                )
+                for row in step_rows
+            ],
+            created_at=workflow_row["created_at"],
+            last_used_at=workflow_row["last_used_at"],
+            use_count=workflow_row["use_count"],
+        )
+
+    def list_workflows(self) -> list[Workflow]:
+        with self._connect() as conn:
+            names = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM workflows ORDER BY created_at DESC, name"
+                ).fetchall()
+            ]
+        return [workflow for name in names if (workflow := self.get_workflow(name))]
+
+    def delete_workflow(self, name: str) -> bool:
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM workflows WHERE name = ?", (name,))
+        return cursor.rowcount > 0
+
+    def mark_workflow_used(self, name: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE workflows
+                SET last_used_at = ?, use_count = use_count + 1
+                WHERE name = ?
+                """,
+                (now, name),
+            )
+
+    def resolve_workflow_step(
+        self, step: WorkflowStep, previous_stdout: str | None
+    ) -> list[str]:
+        if not step.use_previous_stdout:
+            return list(step.argv)
+        if step.template_id is None:
+            raise WorkflowValidationError(
+                f"workflow step {step.position} has no template reference"
+            )
+        if previous_stdout is None:
+            raise WorkflowValidationError(
+                f"workflow step {step.position} requires previous-step stdout"
+            )
+
+        template = self.get_template(step.template_id)
+        if template is None:
+            raise WorkflowValidationError(
+                f"workflow step {step.position} references missing template {step.template_id}"
+            )
+        variable_parts = [part.variable for part in template.parts if part.variable is not None]
+        if len(variable_parts) != 1:
+            raise WorkflowValidationError(
+                f"workflow step {step.position} template must have exactly one variable"
+            )
+
+        value = previous_stdout.strip()
+        constraint = variable_parts[0]
+        assert constraint is not None
+        if not constraint_matches(constraint, value):
+            raise WorkflowValidationError(
+                f"workflow step {step.position} rejected previous stdout {value!r}: "
+                f"it does not satisfy {constraint.constraint_type}"
+            )
+        return [part.literal if part.literal is not None else value for part in template.parts]
 
     def list_all(self) -> list[ApprovedCommand]:
         with self._connect() as conn:

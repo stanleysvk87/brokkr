@@ -62,7 +62,10 @@ CREATE TABLE IF NOT EXISTS decisions (
     created_at TEXT NOT NULL,
     decision TEXT NOT NULL,
     final_argv_json TEXT,
-    reason TEXT
+    reason TEXT,
+    workflow_run_id TEXT,
+    workflow_name TEXT,
+    workflow_step INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS commands (
@@ -76,7 +79,10 @@ CREATE TABLE IF NOT EXISTS commands (
     duration_ms REAL NOT NULL,
     container_id TEXT NOT NULL,
     image_id TEXT NOT NULL,
-    network_enabled INTEGER NOT NULL DEFAULT 0
+    network_enabled INTEGER NOT NULL DEFAULT 0,
+    workflow_run_id TEXT,
+    workflow_name TEXT,
+    workflow_step INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_commands_created_at ON commands (created_at);
@@ -93,6 +99,13 @@ class ManualDecision:
 
 
 @dataclass(frozen=True)
+class ReviewedCommand:
+    command_id: str
+    task_description: str
+    argv: list[str]
+
+
+@dataclass(frozen=True)
 class HistoryEntry:
     command_id: str
     created_at: str
@@ -102,6 +115,9 @@ class HistoryEntry:
     exit_code: int | None
     timed_out: bool
     proposal_error: str | None
+    workflow_run_id: str | None = None
+    workflow_name: str | None = None
+    workflow_step: int | None = None
 
     @property
     def displayed_decision(self) -> str:
@@ -133,17 +149,40 @@ class AuditStore:
         self._blobs_dir.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
-            columns = {row[1] for row in conn.execute("PRAGMA table_info(commands)")}
-            if "network_enabled" not in columns:
-                try:
-                    conn.execute(
-                        "ALTER TABLE commands ADD COLUMN "
-                        "network_enabled INTEGER NOT NULL DEFAULT 0"
-                    )
-                except sqlite3.OperationalError:
-                    columns = {row[1] for row in conn.execute("PRAGMA table_info(commands)")}
-                    if "network_enabled" not in columns:
-                        raise
+            self._ensure_columns(
+                conn,
+                "commands",
+                {
+                    "network_enabled": "INTEGER NOT NULL DEFAULT 0",
+                    "workflow_run_id": "TEXT",
+                    "workflow_name": "TEXT",
+                    "workflow_step": "INTEGER",
+                },
+            )
+            self._ensure_columns(
+                conn,
+                "decisions",
+                {
+                    "workflow_run_id": "TEXT",
+                    "workflow_name": "TEXT",
+                    "workflow_step": "INTEGER",
+                },
+            )
+
+    @staticmethod
+    def _ensure_columns(
+        conn: sqlite3.Connection, table: str, columns: dict[str, str]
+    ) -> None:
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for name, declaration in columns.items():
+            if name in existing:
+                continue
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
+            except sqlite3.OperationalError:
+                current = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+                if name not in current:
+                    raise
 
     @staticmethod
     def new_command_id() -> str:
@@ -224,6 +263,10 @@ class AuditStore:
         decision: str,
         final_argv: list[str] | None,
         reason: str | None = None,
+        *,
+        workflow_run_id: str | None = None,
+        workflow_name: str | None = None,
+        workflow_step: int | None = None,
     ) -> None:
         """Records the human or approval-gate outcome, including distinct
         exact and template auto-approval decisions."""
@@ -235,14 +278,19 @@ class AuditStore:
             "decision": decision,
             "final_argv": final_argv,
             "reason": reason,
+            "workflow_run_id": workflow_run_id,
+            "workflow_name": workflow_name,
+            "workflow_step": workflow_step,
         }
         self._write_blob(command_id, "decision", blob)
 
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO decisions (command_id, created_at, decision, final_argv_json, reason)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO decisions (
+                    command_id, created_at, decision, final_argv_json, reason,
+                    workflow_run_id, workflow_name, workflow_step
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     command_id,
@@ -250,6 +298,9 @@ class AuditStore:
                     decision,
                     json.dumps(final_argv, ensure_ascii=False) if final_argv else None,
                     reason,
+                    workflow_run_id,
+                    workflow_name,
+                    workflow_step,
                 ),
             )
 
@@ -261,6 +312,9 @@ class AuditStore:
                 "decision": decision,
                 "final_argv": final_argv,
                 "reason": reason,
+                "workflow_run_id": workflow_run_id,
+                "workflow_name": workflow_name,
+                "workflow_step": workflow_step,
             }
         )
 
@@ -282,33 +336,66 @@ class AuditStore:
             if row[1] is not None and row[0].lower().startswith(normalized)
         ]
 
+    def last_reviewed_commands(self, limit: int) -> list[ReviewedCommand]:
+        """Return the last human-approved proposal executions in original order."""
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT p.command_id, p.task_description, c.argv_json
+                FROM proposals AS p
+                JOIN decisions AS d ON d.command_id = p.command_id
+                JOIN commands AS c ON c.command_id = p.command_id
+                WHERE d.decision IN ('approved', 'edited')
+                ORDER BY c.created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [
+            ReviewedCommand(row[0], row[1], json.loads(row[2])) for row in reversed(rows)
+        ]
+
     def list_history(
-        self, limit: int = 20, decision: str | None = None
+        self,
+        limit: int = 20,
+        decision: str | None = None,
+        workflow: str | None = None,
     ) -> list[HistoryEntry]:
-        """Return recent proposal turns without modifying the audit trail."""
+        """Return recent proposal turns and workflow steps without modifying audit data."""
         if limit < 1:
             raise ValueError("limit must be at least 1")
 
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT
-                    p.command_id,
-                    p.created_at,
-                    p.task_description,
-                    d.decision,
-                    d.reason,
-                    c.exit_code,
-                    c.timed_out,
-                    p.error
-                FROM proposals AS p
-                LEFT JOIN decisions AS d ON d.command_id = p.command_id
-                LEFT JOIN commands AS c ON c.command_id = p.command_id
-                WHERE (? IS NULL OR d.decision = ?)
-                ORDER BY p.created_at DESC
+                WITH history_rows AS (
+                    SELECT
+                        p.command_id, p.created_at, p.task_description,
+                        d.decision, d.reason, c.exit_code, c.timed_out, p.error,
+                        NULL AS workflow_run_id, NULL AS workflow_name,
+                        NULL AS workflow_step
+                    FROM proposals AS p
+                    LEFT JOIN decisions AS d ON d.command_id = p.command_id
+                    LEFT JOIN commands AS c ON c.command_id = p.command_id
+                    UNION ALL
+                    SELECT
+                        d.command_id, d.created_at,
+                        'workflow ' || d.workflow_name || ' step ' || d.workflow_step,
+                        d.decision, d.reason, c.exit_code, c.timed_out, NULL,
+                        d.workflow_run_id, d.workflow_name, d.workflow_step
+                    FROM decisions AS d
+                    LEFT JOIN commands AS c ON c.command_id = d.command_id
+                    WHERE d.workflow_run_id IS NOT NULL
+                )
+                SELECT * FROM history_rows
+                WHERE (? IS NULL OR decision = ?)
+                  AND (? IS NULL OR workflow_name = ?)
+                ORDER BY created_at DESC
                 LIMIT ?
                 """,
-                (decision, decision, limit),
+                (decision, decision, workflow, workflow, limit),
             ).fetchall()
         return [
             HistoryEntry(
@@ -320,17 +407,35 @@ class AuditStore:
                 exit_code=row[5],
                 timed_out=bool(row[6]),
                 proposal_error=row[7],
+                workflow_run_id=row[8],
+                workflow_name=row[9],
+                workflow_step=row[10],
             )
             for row in rows
         ]
 
     def record_execution(
-        self, command_id: str, result: SandboxExecutionResult, source: str = "manual"
+        self,
+        command_id: str,
+        result: SandboxExecutionResult,
+        source: str = "manual",
+        *,
+        workflow_run_id: str | None = None,
+        workflow_name: str | None = None,
+        workflow_step: int | None = None,
     ) -> None:
         """Records one sandbox execution across all three stores."""
         now = datetime.now(timezone.utc).isoformat()
 
-        blob = {"command_id": command_id, "created_at": now, "source": source, **asdict(result)}
+        blob = {
+            "command_id": command_id,
+            "created_at": now,
+            "source": source,
+            "workflow_run_id": workflow_run_id,
+            "workflow_name": workflow_name,
+            "workflow_step": workflow_step,
+            **asdict(result),
+        }
         self._write_blob(command_id, "execution", blob)
 
         with self._connect() as conn:
@@ -339,8 +444,9 @@ class AuditStore:
                 INSERT INTO commands (
                     command_id, created_at, source, argv_json,
                     exit_code, timed_out, truncated, duration_ms,
-                    container_id, image_id, network_enabled
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    container_id, image_id, network_enabled,
+                    workflow_run_id, workflow_name, workflow_step
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     command_id,
@@ -354,6 +460,9 @@ class AuditStore:
                     result.container_id,
                     result.image_id,
                     int(result.network_enabled),
+                    workflow_run_id,
+                    workflow_name,
+                    workflow_step,
                 ),
             )
 
@@ -368,5 +477,8 @@ class AuditStore:
                 "timed_out": result.timed_out,
                 "network_enabled": result.network_enabled,
                 "duration_ms": round(result.duration_ms, 1),
+                "workflow_run_id": workflow_run_id,
+                "workflow_name": workflow_name,
+                "workflow_step": workflow_step,
             }
         )

@@ -23,7 +23,8 @@ decided, and what actually ran.
 Stages 0–5 of the build are done: the sandbox mechanism, LLM proposals,
 human confirmation, the policy blocklist, exact-match remembered approvals,
 optional human-authored approval templates, and explicit human-curated memory
-all work end-to-end and are covered by tests. Individual commands can opt in to
+all work end-to-end and are covered by tests. Named workflows can replay a
+human-reviewed sequence only when the human explicitly runs it. Individual commands can opt in to
 temporary network access while the sandbox remains isolated by default. Template
 matching remains off by default. Manual/advisory handling covers commands that
 must run outside the sandbox, and `brokkr doctor` reports setup problems without
@@ -85,6 +86,7 @@ brokkr doctor
 # Browse recent proposal decisions and outcomes; filters are optional.
 brokkr history --limit 20
 brokkr history --decision blocked
+brokkr history --workflow backup-check
 
 # Inspect the sandbox lifecycle without creating or starting a container.
 brokkr sandbox status
@@ -114,6 +116,18 @@ brokkr approvals list
 
 # Forget a remembered command -- replace 1 with an ID from the list.
 brokkr approvals revoke 1
+
+# After approving a sequence of proposal commands, inspect and save the last
+# three as one explicitly named workflow. Runs stop on the first failed step.
+brokkr workflow save backup-check --steps 3
+brokkr workflow show backup-check
+brokkr workflow run backup-check
+brokkr workflow list
+brokkr workflow delete backup-check
+
+# A later step may replace its template's single variable with the whole
+# trimmed stdout of the previous step, after the template constraint validates it.
+brokkr workflow save inspect-found --steps 2 --from-previous 2=tpl_abcd1234
 
 # Add explicit workspace context for future proposals, then inspect it.
 brokkr memory add "This workspace uses Python 3.12"

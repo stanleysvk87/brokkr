@@ -245,6 +245,14 @@ issue.
   reviewed command runs. Semantic/model-inferred similarity is never used as
   a basis for skipping review. Every exact or template match still passes the
   static blocklist. See docs/architecture.md's "Approval matching" section.
+- **Named workflows replay only human-reviewed commands and are never model
+  selected.** A workflow runs only through an explicit
+  `brokkr workflow run <name>`. Each resolved step passes the current static
+  blocklist immediately before sandbox execution, including a template step
+  whose one variable came from the previous step's whole trimmed stdout. That
+  value must satisfy the existing human-authored template constraint. Any
+  constraint failure, policy block, timeout, or non-zero exit stops the run;
+  later steps do not execute and there is no continue-on-error option.
 
 ## Reporting a vulnerability
 
