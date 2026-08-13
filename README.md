@@ -71,6 +71,13 @@ source .venv/bin/activate
 ## Quickstart
 
 ```bash
+# Start interactive mode, then type one task per line without shell quoting.
+# Use exit, quit, or Ctrl+D when finished.
+brokkr
+
+# Session-wide overrides use root options before any task is entered.
+brokkr --model qwen3:4b --allow-network
+
 # Check Docker, Ollama, the configured model, and workspace permissions
 # without building, starting, pulling, or executing anything.
 brokkr doctor

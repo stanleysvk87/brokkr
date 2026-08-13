@@ -1,12 +1,10 @@
 """brokkr CLI entry point.
 
 `brokkr sandbox ...` (Stage 1) is direct, no-LLM sandbox control -- also
-the tool used to manually verify the sandbox's own safety guarantees
-(see the Stage 1 verification checklist in
-~/.claude/plans/partitioned-fluttering-sonnet.md) -- rm -rf /, a hung
-process, a network call -- and it deliberately has no policy blocklist
-gate of its own, since that verification depends on catastrophic
-commands actually reaching the sandbox mechanism.
+the tool used to manually verify the sandbox's own safety guarantees --
+rm -rf /, a hung process, a network call -- and it deliberately has no
+policy blocklist gate of its own, since that verification depends on
+catastrophic commands actually reaching the sandbox mechanism.
 
 `brokkr propose` (Stage 2+) is where a model gets involved: it proposes a
 command, a human approves/edits/rejects it, and only *then* -- right before
@@ -15,6 +13,9 @@ as defense in depth on top of the Docker boundary that Stage 1 already
 proved. Exact remembered argv can skip review. When explicitly enabled,
 human-authored templates can do the same for constrained variable positions;
 the model never selects positions or constraints.
+
+Bare `brokkr` runs repeated independent tasks through that exact same proposal
+pipeline; it adds an input loop, not a second approval/execution implementation.
 
 `brokkr approvals ...` lists and revokes remembered commands.
 `brokkr memory ...` explicitly manages human-curated workspace context.
@@ -25,6 +26,7 @@ from __future__ import annotations
 
 import shlex
 import string
+from dataclasses import dataclass
 from pathlib import Path
 
 import typer
@@ -41,14 +43,18 @@ from brokkr.approvals.store import (
     format_template,
 )
 from brokkr.audit.store import AuditStore, ManualDecision
-from brokkr.config import load_settings
+from brokkr.config import Settings, load_settings
 from brokkr.doctor import DoctorCheck, run_doctor
 from brokkr.llm.client import OllamaClient
 from brokkr.memory.store import MemoryStore
 from brokkr.permissions.policy import check_prohibited
 from brokkr.sandbox.docker_sandbox import DockerSandbox, SandboxError
 
-app = typer.Typer(help="brokkr -- a local, sandboxed, tool-augmented LLM agent.")
+app = typer.Typer(
+    help="brokkr -- a local, sandboxed, tool-augmented LLM agent.",
+    invoke_without_command=True,
+    no_args_is_help=False,
+)
 sandbox_app = typer.Typer(help="Direct control of the Docker sandbox (Stage 1, no LLM).")
 approvals_app = typer.Typer(help="List and revoke remembered (auto-approved) commands.")
 memory_app = typer.Typer(help="Manage human-curated context for future proposals.")
@@ -60,6 +66,26 @@ app.add_typer(manual_app, name="manual")
 
 console = Console()
 _MANUAL_ID_LENGTH = 8
+
+
+@dataclass(frozen=True)
+class ProposalServices:
+    settings: Settings
+    audit: AuditStore
+    approvals: ApprovalStore
+    memory: MemoryStore
+    client: OllamaClient
+
+
+def _proposal_services(settings: Settings | None = None) -> ProposalServices:
+    loaded_settings = settings or load_settings()
+    return ProposalServices(
+        settings=loaded_settings,
+        audit=AuditStore(loaded_settings),
+        approvals=ApprovalStore(loaded_settings),
+        memory=MemoryStore(loaded_settings),
+        client=OllamaClient(loaded_settings),
+    )
 
 
 def _print_doctor_check(check: DoctorCheck) -> None:
@@ -304,34 +330,22 @@ def sandbox_status() -> None:
     console.print(table)
 
 
-@app.command()
-def propose(
-    task: str = typer.Argument(..., help="Plain-language description of what to do."),
-    model: str | None = typer.Option(
-        None, "--model", help="Override the configured default Ollama model."
-    ),
-    timeout: float | None = typer.Option(
-        None, "--timeout", help="Override the configured per-command sandbox timeout (seconds)."
-    ),
-    allow_network: bool = typer.Option(
-        False,
-        "--allow-network",
-        help="Temporarily attach network access for this execution only.",
-    ),
+def _run_proposal(
+    task: str,
+    services: ProposalServices,
+    *,
+    model: str | None = None,
+    timeout: float | None = None,
+    allow_network: bool = False,
 ) -> None:
-    """Asks the model to propose a command for TASK, shows you its
-    reasoning, and lets you run it as-is, edit it, reject it, or handle it
-    manually -- unless an exact command was remembered earlier or an enabled,
-    human-authored approval template matches. Nothing else runs without
-    confirmation, and the proposal, your decision, and (if anything ran) the
-    execution are all recorded under one shared command_id -- see logs/audit.db."""
-    settings = load_settings()
-    audit = AuditStore(settings)
-    approvals = ApprovalStore(settings)
-    memory = MemoryStore(settings)
+    """Run one task through the shared proposal, approval, and execution pipeline."""
+    settings = services.settings
+    audit = services.audit
+    approvals = services.approvals
+    memory = services.memory
+    client = services.client
     command_id = audit.new_command_id()
 
-    client = OllamaClient(settings)
     notes = memory.recent(settings.memory_max_notes)
     result = client.propose(task, model=model, notes=[entry.note for entry in notes])
     audit.record_proposal(command_id, result)
@@ -467,6 +481,96 @@ def propose(
             pass
 
     raise typer.Exit(code=124 if exec_result.timed_out else exec_result.exit_code)
+
+
+@app.command()
+def propose(
+    task: str = typer.Argument(..., help="Plain-language description of what to do."),
+    model: str | None = typer.Option(
+        None, "--model", help="Override the configured default Ollama model."
+    ),
+    timeout: float | None = typer.Option(
+        None, "--timeout", help="Override the configured per-command sandbox timeout (seconds)."
+    ),
+    allow_network: bool = typer.Option(
+        False,
+        "--allow-network",
+        help="Temporarily attach network access for this execution only.",
+    ),
+) -> None:
+    """Asks the model to propose a command for TASK, shows you its
+    reasoning, and lets you run it as-is, edit it, reject it, or handle it
+    manually -- unless an exact command was remembered earlier or an enabled,
+    human-authored approval template matches. Nothing else runs without
+    confirmation, and the proposal, your decision, and (if anything ran) the
+    execution are all recorded under one shared command_id -- see logs/audit.db."""
+    _run_proposal(
+        task,
+        _proposal_services(),
+        model=model,
+        timeout=timeout,
+        allow_network=allow_network,
+    )
+
+
+def _interactive_session(
+    *,
+    model: str | None = None,
+    timeout: float | None = None,
+    allow_network: bool = False,
+) -> None:
+    services = _proposal_services()
+    console.print("[bold]brokkr interactive mode[/bold]")
+    console.print("Type a task in plain language. Type help for a reminder, or exit/quit to leave.")
+
+    while True:
+        try:
+            task = console.input("\n[bold cyan]brokkr>[/bold cyan] ")
+        except EOFError:
+            console.print()
+            return
+
+        command = task.strip().lower()
+        if command in {"exit", "quit"}:
+            return
+        if command == "help":
+            console.print("Type one task per line; use exit, quit, or Ctrl+D to leave.")
+            continue
+        if not task.strip():
+            continue
+
+        try:
+            _run_proposal(
+                task,
+                services,
+                model=model,
+                timeout=timeout,
+                allow_network=allow_network,
+            )
+        except typer.Exit:
+            # A task's exit status ends `brokkr propose`, but only ends that
+            # turn in the interactive session.
+            continue
+
+
+@app.callback(invoke_without_command=True)
+def main(
+    ctx: typer.Context,
+    model: str | None = typer.Option(
+        None, "--model", help="Override the default model for every interactive task."
+    ),
+    timeout: float | None = typer.Option(
+        None, "--timeout", help="Override the sandbox timeout for every interactive task."
+    ),
+    allow_network: bool = typer.Option(
+        False,
+        "--allow-network",
+        help="Allow temporary network access for every interactive task.",
+    ),
+) -> None:
+    """Start interactive mode when no subcommand is given."""
+    if ctx.invoked_subcommand is None:
+        _interactive_session(model=model, timeout=timeout, allow_network=allow_network)
 
 
 @manual_app.command("show")

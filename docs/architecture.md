@@ -2,10 +2,10 @@
 
 ## The pipeline
 
-Every proposal handled through `brokkr propose` enters the same four-gate
-pipeline. The human-decision gate is skipped when an exact or enabled template
-approval matches; every gate that does apply is independently visible in the
-audit trail:
+Every proposal turn, whether entered through `brokkr propose` or bare
+`brokkr` interactive mode, enters the same four-gate pipeline. The
+human-decision gate is skipped when an exact or enabled template approval
+matches; every gate that does apply is independently visible in the audit trail:
 
 ```
 task description
@@ -62,8 +62,7 @@ None of these four are the actual safety boundary. That's step [5] — see
 ## The audit trail
 
 `brokkr/audit/store.py` (`logs/audit.db`) has three tables, all keyed by
-one `command_id` minted once per `brokkr propose` invocation, before the
-model is even called:
+one `command_id` minted once per proposal turn, before the model is even called:
 
 - `proposals` — what the model was asked, and what it proposed (or
   failed to produce).

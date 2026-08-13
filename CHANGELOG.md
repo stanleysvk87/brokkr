@@ -1,5 +1,20 @@
 # Changelog
 
+## Interactive task mode -- 2026-08-13
+
+Running bare `brokkr` now starts a small interactive loop. Each input line is
+one complete plain-language task, so quotes, apostrophes, backslashes, and shell
+metacharacters need no shell escaping. `exit`, `quit`, and Ctrl+D leave cleanly;
+`help` prints a one-line reminder. Root `--model`, `--timeout`, and
+`--allow-network` options apply to every task in that session.
+
+The existing `propose` body was moved into one shared function used by both the
+named command and interactive mode. The REPL constructs settings, audit,
+approval, memory, and Ollama services once, but every line still creates an
+independent proposal/audit ID and traverses the identical approval, template,
+policy, manual, network, execution, and remember paths. It adds no conversation
+history, shell state, or parallel decision implementation.
+
 ## Documentation consolidation after rapid feature rounds -- 2026-08-13
 
 Read every shipped document against the current CLI and implementation after
