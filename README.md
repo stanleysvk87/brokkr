@@ -122,6 +122,34 @@ brokkr memory forget 1
 brokkr sandbox reset
 ```
 
+## Example session
+
+A real interactive session, unedited except for trimming the banner:
+
+```
+$ brokkr
+brokkr interactive mode
+Type a task in plain language. Type help for a reminder, or exit/quit to leave.
+
+brokkr> how much disk space is free in the workspace
+reasoning: The user wants to check how much disk space is available in the
+/workspace directory.
+command: df -h /workspace
+Run this? [y]es / [e]dit / [n]o / [m]anual [y/e/n/m] (n): y
+Filesystem             Size  Used Avail Use% Mounted on
+/dev/mapper/cryptroot  476G  228G  245G  49% /workspace
+
+-- exit 0, 37ms, command_id=bdf308258ac54703bda0966118acfb58
+Remember this exact command so it skips confirmation next time? [y/n] (n): n
+
+brokkr> exit
+```
+
+Every task goes through the same reasoning-then-command display and the same
+`[y]es / [e]dit / [n]o / [m]anual` decision — no shell quoting to get right,
+since a full REPL line is the task text as typed. Nothing runs without that
+decision.
+
 Every proposal, decision, and sandbox execution is recorded in `logs/audit.db`
 (queryable SQLite), `logs/blobs/<command_id>/` (full raw payloads — prompts,
 completions, stdout/stderr), and `logs/audit.jsonl` (a flat summary for
