@@ -207,6 +207,13 @@ def test_system_prompt_steers_network_checks_away_from_ping():
     assert "no raw-socket capability" in _SYSTEM_PROMPT
 
 
+def test_system_prompt_explains_that_direct_argv_does_not_expand_globs():
+    assert "Argv elements are never expanded by a shell" in _SYSTEM_PROMPT
+    assert "a literal string, not a file match" in _SYSTEM_PROMPT
+    assert '["du", "-sh", "/workspace/reports/*"]' in _SYSTEM_PROMPT
+    assert '"-exec", "du", "-sh", "{}", ";"' in _SYSTEM_PROMPT
+
+
 def test_system_prompt_steers_away_from_dmesg():
     # Same underlying cause as ping (CAP_SYSLOG dropped, same as
     # CAP_NET_RAW) -- found by dogfooding a "check kernel messages" task

@@ -61,6 +61,13 @@ _SYSTEM_PROMPT = (
     "Never propose a shell pipeline joined by ;, &&, or | as a single argv "
     'string -- if the task genuinely needs a shell, propose ["bash", "-c", '
     '"<script>"] instead, with the whole script as one argv element. '
+    "Argv elements are never expanded by a shell. A glob such as '*.txt' or "
+    "'/workspace/reports/*' passed directly to du, cat, cp, rm, or another ordinary "
+    "command is a literal string, not a file match. Use find's own pattern matching "
+    "for multiple files instead, or deliberately use bash -c when a shell glob is "
+    "genuinely required. Wrong: [\"du\", \"-sh\", \"/workspace/reports/*\"]. "
+    'Right: ["find", "/workspace/reports", "-maxdepth", "1", "-type", "f", '
+    '"-exec", "du", "-sh", "{}", ";"]. '
     "For network reachability checks, use curl instead of ping: this sandbox "
     "deliberately has no raw-socket capability, so ping cannot work. dmesg "
     "and other kernel-log commands will fail the same way (no CAP_SYSLOG); "

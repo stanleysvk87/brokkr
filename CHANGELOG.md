@@ -1,5 +1,18 @@
 # Changelog
 
+## Direct-argv glob guidance -- 2026-08-13
+
+Round 23 dogfooding found a proposal that passed a wildcard path directly to
+`du`, where it remained a literal string because brokkr executes argv without
+an implicit shell. The system prompt now states that direct argv does not expand
+globs and gives concrete wrong and correct examples, steering patterned file
+tasks toward `find` or a deliberate `bash -c` shell script.
+
+This is prompt guidance rather than a deterministic rejection. Glob characters
+are valid literal content for many commands, URLs, and patterns, so a general
+validator would introduce false positives without understanding each command's
+semantics. No validation, policy, approval, or execution behavior changed.
+
 ## Round 21 dogfooding fixes -- 2026-08-13
 
 Tightened command-proposal guidance after free-form VM dogfooding. Destructive
