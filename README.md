@@ -124,7 +124,9 @@ brokkr sandbox reset
 
 ## Example session
 
-A real interactive session, unedited except for trimming the banner:
+![brokkr interactive mode: proposing, reviewing, and running a command](docs/assets/demo.gif)
+
+The same session as text, unedited except for trimming the banner:
 
 ```
 $ brokkr
