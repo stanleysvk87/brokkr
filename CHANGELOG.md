@@ -944,3 +944,12 @@ This remains model guidance, not a semantic validator, keyword heuristic, or
 second model pass. It should make the observed proposals measurably better, but
 a small local model can still fail to follow the instruction; sandboxing,
 policy, and human review behavior are unchanged.
+
+## Semantic correctness caveat — 2026-08-13
+
+README and the security model now state explicitly that brokkr verifies
+containment, policy, execution, and auditability, not whether a command
+semantically fulfilled the task. Exit 0 can still accompany a wrong filter,
+missing sort, or omitted output file, so users must inspect the displayed
+command and result before relying on it. This documents the inherent limit
+observed during Round 37 without adding a validator, heuristic, or model pass.

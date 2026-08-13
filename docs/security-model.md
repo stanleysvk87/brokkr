@@ -44,6 +44,12 @@ else on the host, cannot reach the network unless the human explicitly grants
 it for that invocation (or configured persistent access), and cannot escalate
 privileges inside the container.
 
+These guarantees cover containment and observability, not semantic
+correctness. brokkr records what ran and its exit status, but does not verify
+that the output actually answers the task; exit 0 means the process reported
+success, not that it used the right filter, sorting, or output destination.
+Inspect the command and its output before acting on the result.
+
 ## What was actually tested
 
 Not just designed — manually run, once per property, during Stage 1

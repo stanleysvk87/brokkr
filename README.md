@@ -55,6 +55,11 @@ pieces fit together.
   command or constrained template a human explicitly chose to remember.
   `brokkr sandbox exec` is a separate direct path where the human types the
   exact argv themselves. There is no mode where brokkr acts entirely on its own.
+- **Not a semantic correctness verifier.** brokkr checks containment, policy,
+  and execution results, but it cannot prove that output satisfies the task. A
+  command can exit 0 with the wrong filter, missing sort, or no requested file
+  written. Read the displayed command and output before relying on the result,
+  especially when another action or decision will depend on it.
 
 ## Getting started on your own machine
 
