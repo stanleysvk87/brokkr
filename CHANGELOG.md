@@ -905,3 +905,19 @@ There are no custom query packs, application changes, Dependabot configuration,
 or additional badge. Local checks can validate the workflow structure and the
 unchanged test suite, but the first real CodeQL analysis and Security-tab result
 will occur only after a human pushes the commit.
+
+## Fresh-machine onboarding — 2026-08-13
+
+README now has a self-contained path from an empty checkout to a verified local
+installation. It names the Docker, Ollama, default model, and Python
+prerequisites; distinguishes the runtime install from contributor tooling; and
+explains which `.env` values normally need attention. The section also frames
+brokkr as a single-user local tool whose writable workspace and human approval
+remain part of the trust model, not a hosted autonomous service.
+
+First-run instructions account for the sandbox image's real lazy-build
+behavior: an initial read-only `doctor` may warn that the image is absent, a
+harmless direct `true` command initializes it, and a second check should report
+five passes with no warnings or failures. The documented steps were followed
+literally in a fresh isolated directory on the disposable VM, using that VM's
+existing Docker and Ollama services but no existing brokkr environment.

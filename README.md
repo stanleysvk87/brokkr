@@ -56,6 +56,81 @@ pieces fit together.
   `brokkr sandbox exec` is a separate direct path where the human types the
   exact argv themselves. There is no mode where brokkr acts entirely on its own.
 
+## Getting started on your own machine
+
+brokkr is a single-user local tool, not a hosted or multi-tenant service. The
+model proposes commands, but you remain responsible for reading the displayed
+argv before approving it. Commands run in Docker with only the configured
+workspace mounted; that workspace is real writable host storage, so an approved
+bad command can still damage its contents. Network access is disabled unless
+you grant it explicitly. Read [docs/security-model.md](docs/security-model.md)
+before treating the sandbox as a boundary for important data.
+
+### 1. Install the prerequisites
+
+- Docker must be installed and running. Your user must be able to run
+  `docker ps` without `sudo`.
+- [Ollama](https://ollama.com) must be installed and running. Pull at least the
+  default model used by this project:
+
+  ```bash
+  ollama pull qwen2.5-coder:7b
+  ```
+
+- Python 3.10 or newer must be installed with virtual-environment support.
+
+### 2. Install brokkr
+
+Replace `REPOSITORY_URL` with the clone URL shown by this repository's Code
+button, then run:
+
+```bash
+git clone REPOSITORY_URL brokkr
+cd brokkr
+python3 -m venv .venv
+.venv/bin/pip install -e .
+cp .env.example .env
+source .venv/bin/activate
+```
+
+The runtime install above is enough to use brokkr. Contributors who also need
+pytest and Ruff should install `.venv/bin/pip install -e ".[dev]"`, matching
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+If Ollama listens somewhere other than `http://127.0.0.1:11434`, edit
+`BROKKR_OLLAMA_URL` in `.env`. Set `BROKKR_DEFAULT_MODEL` to the exact name you
+pulled if it is not `qwen2.5-coder:7b`. The other defaults are suitable for a
+first local run on a typical Docker host. On a host exposing fewer than four
+CPUs to Docker, lower `BROKKR_SANDBOX_CPU_LIMIT` to the available CPU count.
+
+### 3. Verify the first run
+
+Start with the read-only health check:
+
+```bash
+brokkr doctor
+```
+
+A fresh machine may report one warning that `brokkr-sandbox:latest` is not
+built yet; there should be no failed checks. Build the image through a harmless
+first sandbox command, then check again:
+
+```bash
+brokkr sandbox exec -- true
+brokkr doctor
+```
+
+A fully initialized healthy setup ends with:
+
+```text
+Summary: 5 passed, 0 warnings, 0 failed
+```
+
+At that point, run `brokkr` for the interactive task prompt or continue with
+the examples below. A proposal still does nothing until you explicitly approve
+it, unless it exactly matches an approval or constrained template you chose to
+remember earlier.
+
 ## Prerequisites
 
 - Docker, with your user in the `docker` group (so `docker ps` works
