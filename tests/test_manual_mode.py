@@ -127,6 +127,42 @@ def test_edited_command_can_be_chosen_for_manual_mode(monkeypatch, settings):
     assert _command_count(settings) == 0
 
 
+def test_malformed_edited_command_is_cleanly_rejected(monkeypatch, settings):
+    _audit, output = _install_propose_fakes(
+        monkeypatch,
+        settings,
+        ["printf", "two lines"],
+        ["e", "printf 'ABC"],
+    )
+
+    with pytest.raises(typer.Exit) as exc_info:
+        cli.propose("print two lines")
+
+    assert exc_info.value.exit_code == 0
+    with sqlite3.connect(settings.audit_db_path) as conn:
+        decision = conn.execute(
+            "SELECT decision, final_argv_json, reason FROM decisions"
+        ).fetchone()
+        proposals_without_decisions = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM proposals AS p
+            LEFT JOIN decisions AS d USING(command_id)
+            WHERE d.command_id IS NULL
+            """
+        ).fetchone()[0]
+    assert decision == (
+        "rejected",
+        None,
+        "edited command could not be parsed: No closing quotation",
+    )
+    assert proposals_without_decisions == 0
+    assert _command_count(settings) == 0
+    rendered = "\n".join(output.messages)
+    assert "could not parse that as a command -- check your quoting" in rendered
+    assert "rejected, nothing ran" in rendered
+
+
 def test_blocklist_applies_before_manual_instructions(monkeypatch, settings):
     _audit, output = _install_propose_fakes(
         monkeypatch, settings, ["rm", "-rf", "/workspace"], ["m"]

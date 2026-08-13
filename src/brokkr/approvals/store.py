@@ -545,6 +545,30 @@ class ApprovalStore:
                 (now, name),
             )
 
+    def validate_workflow_references(self, workflow: Workflow) -> None:
+        """Check template references that can be validated before execution."""
+        for step in workflow.steps:
+            if step.template_id is None:
+                continue
+            try:
+                template = self.get_template(step.template_id)
+            except (KeyError, TypeError, TemplateValidationError, json.JSONDecodeError) as exc:
+                raise WorkflowValidationError(
+                    f"workflow step {step.position} references invalid template "
+                    f"{step.template_id}"
+                ) from exc
+            if template is None:
+                raise WorkflowValidationError(
+                    f"workflow step {step.position} references missing template "
+                    f"{step.template_id}"
+                )
+            variable_count = sum(part.variable is not None for part in template.parts)
+            if variable_count != 1:
+                raise WorkflowValidationError(
+                    f"workflow step {step.position} template {step.template_id} must have "
+                    "exactly one variable"
+                )
+
     def resolve_workflow_step(
         self, step: WorkflowStep, previous_stdout: str | None
     ) -> list[str]:

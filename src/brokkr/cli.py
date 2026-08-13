@@ -465,7 +465,16 @@ def _run_proposal(
 
         if choice == "e":
             edited = Prompt.ask("Edit command", default=shlex.join(proposal.argv))
-            final_argv = shlex.split(edited)
+            try:
+                final_argv = shlex.split(edited)
+            except ValueError as exc:
+                reason = f"edited command could not be parsed: {exc}"
+                audit.record_decision(command_id, "rejected", None, reason=reason)
+                console.print(
+                    "[red]could not parse that as a command -- check your quoting[/red]"
+                )
+                console.print("[yellow]rejected, nothing ran[/yellow]")
+                raise typer.Exit(code=0) from exc
             edited_choice = Prompt.ask(
                 "Use edited command? \\[y]es / \\[n]o / \\[m]anual",
                 choices=["y", "n", "m"],
@@ -819,6 +828,12 @@ def workflow_run(
     if workflow is None:
         console.print(f"[yellow]no workflow named {name}[/yellow]")
         raise typer.Exit(code=1)
+
+    try:
+        approvals.validate_workflow_references(workflow)
+    except WorkflowValidationError as exc:
+        console.print(f"[red]workflow cannot run:[/red] {exc}")
+        raise typer.Exit(code=1) from exc
 
     audit = AuditStore(settings)
     workflow_run_id = audit.new_command_id()

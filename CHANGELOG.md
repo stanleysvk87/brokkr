@@ -1,5 +1,18 @@
 # Changelog
 
+## Round 26 workflow dogfooding fixes -- 2026-08-13
+
+Malformed human edits no longer escape as a `shlex.split` traceback. An edited
+command with invalid quoting is recorded as rejected, produces no execution,
+and shows a short correction message, so every recorded proposal still has a
+documented terminal decision.
+
+Workflow runs now preflight every referenced approval template before creating
+a run or executing step 1. A missing, malformed, or no-longer-single-variable
+template stops the invocation without constructing the sandbox or changing the
+workflow use count. Runtime stdout constraint checks remain in place because
+their result cannot be known before preceding steps actually run.
+
 ## Named multi-step workflow templates -- 2026-08-13
 
 Added `brokkr workflow save/list/show/run/delete` for explicitly replaying a

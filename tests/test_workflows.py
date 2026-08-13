@@ -376,6 +376,71 @@ def test_missing_workflow_fails_clearly_without_sandbox(monkeypatch, tmp_path):
     assert "no workflow named missing" in output.getvalue()
 
 
+def test_revoked_template_fails_preflight_before_first_step(monkeypatch, tmp_path):
+    settings = _settings(tmp_path)
+    store = ApprovalStore(settings)
+    template = store.create_template(
+        ["cat", "/workspace/original.txt"],
+        {1: TemplateConstraint("path_under_workdir")},
+    )
+    steps = store.prepare_workflow_steps(
+        [["printf", "/workspace/next.txt"], ["cat", "/workspace/original.txt"]],
+        {2: template.id},
+    )
+    store.create_workflow("revoked", steps)
+    assert store.revoke_template(template.id) is True
+    calls, output = _install_workflow_cli(monkeypatch, settings, [])
+
+    class ForbiddenSandbox:
+        def __init__(self, loaded_settings):
+            raise AssertionError("preflight failure must not construct a sandbox")
+
+    monkeypatch.setattr(cli, "DockerSandbox", ForbiddenSandbox)
+
+    result = CliRunner().invoke(cli.app, ["workflow", "run", "revoked"])
+
+    assert result.exit_code == 1
+    assert calls == []
+    normalized_output = " ".join(output.getvalue().split())
+    assert f"workflow step 2 references missing template {template.id}" in normalized_output
+    assert store.get_workflow("revoked").use_count == 0
+    assert not settings.audit_db_path.exists()
+
+
+def test_changed_template_shape_fails_preflight_before_first_step(monkeypatch, tmp_path):
+    settings = _settings(tmp_path)
+    store = ApprovalStore(settings)
+    template = store.create_template(
+        ["cat", "/workspace/original.txt"],
+        {1: TemplateConstraint("path_under_workdir")},
+    )
+    steps = store.prepare_workflow_steps(
+        [["printf", "/workspace/next.txt"], ["cat", "/workspace/original.txt"]],
+        {2: template.id},
+    )
+    store.create_workflow("changed-shape", steps)
+    two_variable_parts = [
+        {"variable": {"type": "enum", "value": ["cat"]}},
+        {"variable": {"type": "path_under_workdir", "value": None}},
+    ]
+    with sqlite3.connect(settings.approvals_db_path) as conn:
+        conn.execute(
+            "UPDATE approval_templates SET template_json = ? WHERE id = ?",
+            (json.dumps(two_variable_parts), template.id),
+        )
+    calls, output = _install_workflow_cli(monkeypatch, settings, [])
+
+    result = CliRunner().invoke(cli.app, ["workflow", "run", "changed-shape"])
+
+    assert result.exit_code == 1
+    assert calls == []
+    normalized_output = " ".join(output.getvalue().split())
+    assert f"workflow step 2 template {template.id}" in normalized_output
+    assert "must have exactly one variable" in normalized_output
+    assert store.get_workflow("changed-shape").use_count == 0
+    assert not settings.audit_db_path.exists()
+
+
 def test_workflow_list_show_and_delete_cli(monkeypatch, tmp_path):
     settings = _settings(tmp_path)
     ApprovalStore(settings).create_workflow(
