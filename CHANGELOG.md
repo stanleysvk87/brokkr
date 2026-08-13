@@ -921,3 +921,26 @@ harmless direct `true` command initializes it, and a second check should report
 five passes with no warnings or failures. The documented steps were followed
 literally in a fresh isolated directory on the disposable VM, using that VM's
 existing Docker and Ollama services but no existing brokkr environment.
+
+## Proposal self-consistency guidance — 2026-08-13
+
+Informal, unplanned live use through both Claude and Codex against the real
+model and sandbox exposed a repeated gap between proposal reasoning and the
+argv that followed. One command claimed it would list the largest three files
+sorted but only ran unsorted `du`; a CSV filter substituted `FAILED` for the
+data's `error` status and used the wrong sort direction; and a checksum task
+claimed it would sort and save a report while only printing hashes to stdout.
+These commands could exit zero without fulfilling the task.
+
+The system prompt now requires reasoning to describe only operations literally
+implemented by argv, preserves exact filter values instead of inventing
+synonyms, and requires an actual write or redirect when a destination path is
+requested. Concrete wrong/right examples cover sorting and limiting, exact CSV
+matching, and checksum output. It also warns that a later successful pipeline
+stage can mask an earlier parse failure and directs deliberate `bash -c`
+pipelines to check intermediate results or enable `set -o pipefail`.
+
+This remains model guidance, not a semantic validator, keyword heuristic, or
+second model pass. It should make the observed proposals measurably better, but
+a small local model can still fail to follow the instruction; sandboxing,
+policy, and human review behavior are unchanged.

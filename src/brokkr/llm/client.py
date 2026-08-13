@@ -76,6 +76,26 @@ _SYSTEM_PROMPT = (
     'Right when a dynamic value is genuinely needed: ["bash", "-c", '
     '"curl \\"https://example.com/$(date +%Y)\\""] -- or avoid substitution when a '
     "fixed or discoverable value works. "
+    "Your reasoning must describe only what the exact proposed argv actually does. "
+    "Never claim that a command sorts, filters, limits, saves, or performs another step "
+    "that is absent from argv. If the task requires those operations, implement every one "
+    "with real command flags or a deliberate bash -c script. Wrong for 'show the largest "
+    "three entries sorted': reasoning that claims sorting and limiting with "
+    '["du", "-ah", "/workspace", "--max-depth=1"]. Right: ["bash", "-c", '
+    '"du -ah /workspace | sort -hr | head -n 3"]. '
+    "Copy filter and match values verbatim from the task or available data; never replace "
+    "a specific value with a plausible synonym or different capitalization. Wrong when "
+    'the required status is error: ["grep", "FAILED", "/workspace/checks.csv"]. '
+    'Right: ["grep", "error", "/workspace/checks.csv"]. '
+    "If a task specifies an output file, argv must actually write or redirect to that exact "
+    "path. Printing correct-looking output to stdout does not satisfy a save or write task. "
+    'Wrong: ["sha256sum", "/workspace/input.txt"]. Right: ["bash", "-c", '
+    '"sha256sum /workspace/input.txt > /workspace/report.sha256"]. '
+    "In a bash -c pipeline, a successful later stage can mask an earlier failure because "
+    "the shell normally reports only the last stage's exit code. When an upstream parse, "
+    "validation, or transformation must succeed, check its result explicitly or start the "
+    'script with set -o pipefail. Right: ["bash", "-c", "set -o pipefail; '
+    'jq -r .service /workspace/events.jsonl | sort | uniq -c"]. '
     "For network reachability checks, use curl instead of ping: this sandbox "
     "deliberately has no raw-socket capability, so ping cannot work. dmesg "
     "and other kernel-log commands will fail the same way (no CAP_SYSLOG); "

@@ -223,6 +223,32 @@ def test_system_prompt_explains_that_direct_argv_does_not_run_command_substituti
     assert '["bash", "-c", "curl \\"https://example.com/$(date +%Y)\\""]' in _SYSTEM_PROMPT
 
 
+def test_system_prompt_requires_reasoning_to_match_exact_argv():
+    assert "reasoning must describe only what the exact proposed argv actually does" in _SYSTEM_PROMPT
+    assert "Never claim that a command sorts, filters, limits, saves" in _SYSTEM_PROMPT
+    assert '["du", "-ah", "/workspace", "--max-depth=1"]' in _SYSTEM_PROMPT
+    assert '"du -ah /workspace | sort -hr | head -n 3"' in _SYSTEM_PROMPT
+
+
+def test_system_prompt_requires_verbatim_filter_values():
+    assert "Copy filter and match values verbatim" in _SYSTEM_PROMPT
+    assert "plausible synonym or different capitalization" in _SYSTEM_PROMPT
+    assert '["grep", "FAILED", "/workspace/checks.csv"]' in _SYSTEM_PROMPT
+    assert '["grep", "error", "/workspace/checks.csv"]' in _SYSTEM_PROMPT
+
+
+def test_system_prompt_requires_requested_output_file_write():
+    assert "argv must actually write or redirect to that exact path" in _SYSTEM_PROMPT
+    assert "Printing correct-looking output to stdout does not satisfy" in _SYSTEM_PROMPT
+    assert "sha256sum /workspace/input.txt > /workspace/report.sha256" in _SYSTEM_PROMPT
+
+
+def test_system_prompt_requires_pipeline_failure_propagation():
+    assert "successful later stage can mask an earlier failure" in _SYSTEM_PROMPT
+    assert "reports only the last stage's exit code" in _SYSTEM_PROMPT
+    assert "set -o pipefail; jq -r .service" in _SYSTEM_PROMPT
+
+
 def test_system_prompt_steers_browser_tasks_away_from_gui_launchers():
     assert "headless container with no display, browser, window manager" in _SYSTEM_PROMPT
     assert "Never propose xdg-open" in _SYSTEM_PROMPT
